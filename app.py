@@ -1,538 +1,439 @@
-import calendar
-import io
-import zipfile
-from datetime import date
-from pathlib import Path
+# app.py  (통째로 교체용)
+# 실행: python -m streamlit run app.py
 
+from __future__ import annotations
+
+from pathlib import Path
+from datetime import date, datetime
+import calendar
 import pandas as pd
 import streamlit as st
 
+# -----------------------------
+# 기본 설정
+# -----------------------------
 st.set_page_config(page_title="맘스락 식단 변경 프로그램", layout="wide")
 
-# -----------------------------
-# Paths
-# -----------------------------
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
-BASE_CSV = DATA_DIR / "base_menu.csv"
-CHANGE_CSV = DATA_DIR / "change_menu.csv"
-DELIV_CSV = DATA_DIR / "delivery.csv"
-MENU_CSV = DATA_DIR / "menu_index.csv"
+BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
+CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
+DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
+MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
+GONGYANG_PATH = DATA_DIR / "gongyang.txt"           # text file
 
-BOWL_IMG_CANDIDATES = [
-    Path("gongyang_bowl.png"),
-    Path("images") / "gongyang_bowl.png",
-    Path("static") / "gongyang_bowl.png",
-]
-
-WEEKDAY_NAMES = ["월", "화", "수", "목", "금", "토", "일"]
-
-GONGYANG_TEXT_4LINES = [
-    "이 음식이 어디에서 왔는가",
-    "내 덕행으로는 받기가 부끄럽네",
-    "마음의 온갖 탐욕을 떠나",
-    "바른 생각으로 이 공양을 받습니다",
-]
+WEEKDAYS_KO = ["월", "화", "수", "목", "금", "토", "일"]
 
 # -----------------------------
-# Utils
+# 유틸
 # -----------------------------
-def load_csv(path: Path, columns: list[str]) -> pd.DataFrame:
-    if path.exists():
-        df = pd.read_csv(path, dtype=str).fillna("")
-        for c in columns:
-            if c not in df.columns:
-                df[c] = ""
-        return df[columns]
-    return pd.DataFrame(columns=columns)
+def _ensure_csv(path: Path, columns: list[str]) -> None:
+    if not path.exists():
+        pd.DataFrame({c: [] for c in columns}).to_csv(path, index=False, encoding="utf-8-sig")
 
-def save_csv(df: pd.DataFrame, path: Path) -> None:
-    df.to_csv(path, index=False, encoding="utf-8-sig")
 
-def get_value(df: pd.DataFrame, d: str, col: str) -> str:
-    hit = df.loc[df["date"] == d, col]
-    return "" if hit.empty else str(hit.iloc[0])
-
-def upsert(df: pd.DataFrame, d: str, col: str, value: str) -> pd.DataFrame:
-    df = df.copy()
-    if (df["date"] == d).any():
-        df.loc[df["date"] == d, col] = value
-    else:
-        df = pd.concat([df, pd.DataFrame([{"date": d, col: value}])], ignore_index=True)
+def _load_csv(path: Path, columns: list[str]) -> pd.DataFrame:
+    _ensure_csv(path, columns)
+    df = pd.read_csv(path)
+    for c in columns:
+        if c not in df.columns:
+            df[c] = ""
+    df = df[columns].copy()
     return df
 
-def delete_row(df: pd.DataFrame, d: str) -> pd.DataFrame:
-    return df.loc[df["date"] != d].reset_index(drop=True)
 
-def fmt_date(d: date) -> str:
-    return d.strftime("%Y-%m-%d")
+def _save_csv(path: Path, df: pd.DataFrame) -> None:
+    df.to_csv(path, index=False, encoding="utf-8-sig")
 
-def mmdd_weekday(d: date) -> str:
-    return f"{d.strftime('%m/%d')}({WEEKDAY_NAMES[d.weekday()]})"
 
-def norm(s: str) -> str:
-    return (s or "").strip()
+def _to_datestr(d: date) -> str:
+    return d.isoformat()
 
-def short(s: str, n: int = 12) -> str:
-    s = norm(s)
-    if not s:
-        return ""
-    return s if len(s) <= n else (s[: n - 1] + "…")
 
-def find_bowl_image():
-    for p in BOWL_IMG_CANDIDATES:
-        if p.exists():
-            return p
-    return None
-
-# -----------------------------
-# Holiday helpers
-# -----------------------------
-def fixed_kr_holidays(year: int) -> dict[str, str]:
-    # 고정 공휴일(양력)만 보장(정확도 매우 높음)
-    return {
-        f"{year}-01-01": "신정",
-        f"{year}-03-01": "삼일절",
-        f"{year}-05-05": "어린이날",
-        f"{year}-06-06": "현충일",
-        f"{year}-08-15": "광복절",
-        f"{year}-10-03": "개천절",
-        f"{year}-10-09": "한글날",
-        f"{year}-12-25": "성탄절",
-    }
-
-def try_holidays_lib(year: int) -> dict[str, str]:
-    # holidays 패키지가 있으면 더 정확(대체공휴일/음력 일부 포함 가능)
+def _parse_datestr(s: str) -> date | None:
     try:
-        import holidays  # type: ignore
-        kr = holidays.KR(years=[year])
-        return {d.strftime("%Y-%m-%d"): str(name) for d, name in kr.items()}
+        return datetime.strptime(str(s), "%Y-%m-%d").date()
     except Exception:
-        return {}
+        return None
 
-def build_holiday_map(year: int) -> dict[str, str]:
-    lib = try_holidays_lib(year)
-    return lib if lib else fixed_kr_holidays(year)
+
+def _month_range(y: int, m: int) -> tuple[date, date]:
+    last = calendar.monthrange(y, m)[1]
+    return date(y, m, 1), date(y, m, last)
+
+
+def _is_weekend(d: date) -> bool:
+    # Monday=0 ... Sunday=6
+    return d.weekday() >= 5
+
+
+def _is_sunday(d: date) -> bool:
+    return d.weekday() == 6
+
 
 # -----------------------------
-# Load data
+# 데이터 로드/저장
 # -----------------------------
-base_df = load_csv(BASE_CSV, ["date", "base_menu"])
-change_df = load_csv(CHANGE_CSV, ["date", "change_menu"])
-deliv_df = load_csv(DELIV_CSV, ["date", "delivery"])
-menu_df = load_csv(MENU_CSV, ["menu"])
-menu_list = sorted({m.strip() for m in menu_df["menu"].tolist() if m.strip()})
+def load_base_menu() -> dict[str, str]:
+    df = _load_csv(BASE_MENU_PATH, ["date", "base_menu"])
+    df["date"] = df["date"].astype(str)
+    df["base_menu"] = df["base_menu"].fillna("").astype(str)
+    return dict(zip(df["date"], df["base_menu"]))
+
+
+def save_base_menu(d: date, menu: str) -> None:
+    df = _load_csv(BASE_MENU_PATH, ["date", "base_menu"])
+    ds = _to_datestr(d)
+    menu = (menu or "").strip()
+    df["date"] = df["date"].astype(str)
+    if (df["date"] == ds).any():
+        df.loc[df["date"] == ds, "base_menu"] = menu
+    else:
+        df = pd.concat([df, pd.DataFrame([{"date": ds, "base_menu": menu}])], ignore_index=True)
+    # 정리
+    df["base_menu"] = df["base_menu"].fillna("").astype(str)
+    df = df.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
+    _save_csv(BASE_MENU_PATH, df)
+
+
+def load_change_menu() -> dict[str, str]:
+    df = _load_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
+    df["date"] = df["date"].astype(str)
+    df["change_menu"] = df["change_menu"].fillna("").astype(str)
+    return dict(zip(df["date"], df["change_menu"]))
+
+
+def save_change_menu(d: date, menu: str) -> None:
+    df = _load_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
+    ds = _to_datestr(d)
+    menu = (menu or "").strip()
+    df["date"] = df["date"].astype(str)
+    if (df["date"] == ds).any():
+        df.loc[df["date"] == ds, "change_menu"] = menu
+    else:
+        df = pd.concat([df, pd.DataFrame([{"date": ds, "change_menu": menu}])], ignore_index=True)
+    df["change_menu"] = df["change_menu"].fillna("").astype(str)
+    df = df.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
+    _save_csv(CHANGE_MENU_PATH, df)
+
+
+def load_delivery() -> dict[str, str]:
+    df = _load_csv(DELIVERY_PATH, ["date", "delivery"])
+    df["date"] = df["date"].astype(str)
+    df["delivery"] = df["delivery"].fillna("Y").astype(str)
+    # delivery: Y(배달), N(배달불요)
+    return dict(zip(df["date"], df["delivery"]))
+
+
+def save_delivery(d: date, delivery: str) -> None:
+    df = _load_csv(DELIVERY_PATH, ["date", "delivery"])
+    ds = _to_datestr(d)
+    delivery = "N" if str(delivery).upper().startswith("N") else "Y"
+    df["date"] = df["date"].astype(str)
+    if (df["date"] == ds).any():
+        df.loc[df["date"] == ds, "delivery"] = delivery
+    else:
+        df = pd.concat([df, pd.DataFrame([{"date": ds, "delivery": delivery}])], ignore_index=True)
+    df["delivery"] = df["delivery"].fillna("Y").astype(str)
+    df = df.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
+    _save_csv(DELIVERY_PATH, df)
+
+
+def load_menu_index() -> list[str]:
+    _ensure_csv(MENU_INDEX_PATH, ["name"])
+    df = pd.read_csv(MENU_INDEX_PATH)
+    if "name" not in df.columns:
+        df = pd.DataFrame({"name": []})
+    df["name"] = df["name"].fillna("").astype(str).str.strip()
+    names = sorted([x for x in df["name"].tolist() if x])
+    # 중복 제거
+    uniq = []
+    for n in names:
+        if n not in uniq:
+            uniq.append(n)
+    return uniq
+
+
+def save_menu_index(names: list[str]) -> None:
+    cleaned = []
+    for n in names:
+        n2 = (n or "").strip()
+        if n2 and n2 not in cleaned:
+            cleaned.append(n2)
+    df = pd.DataFrame({"name": sorted(cleaned)})
+    _save_csv(MENU_INDEX_PATH, df)
+
+
+def load_gongyang_text() -> str:
+    if GONGYANG_PATH.exists():
+        return GONGYANG_PATH.read_text(encoding="utf-8")
+    default = (
+        "이 음식이 어디에서 왔는가\n"
+        "내 덕행으로는 받기가 부끄럽네\n"
+        "그 공덕을 헤아려서 이 공양을 받습니다\n"
+        "마음의 탐욕을 여의고 몸을 바르게 하여\n"
+        "도를 이루고자 이 공양을 받습니다"
+    )
+    GONGYANG_PATH.write_text(default, encoding="utf-8")
+    return default
+
+
+def save_gongyang_text(text: str) -> None:
+    GONGYANG_PATH.write_text(text or "", encoding="utf-8")
+
 
 # -----------------------------
-# State init
+# 캘린더 UI
 # -----------------------------
+def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[str, str], deliv_map: dict[str, str]) -> date:
+    cal = calendar.Calendar(firstweekday=0)  # Monday start
+    month_days = list(cal.itermonthdates(y, m))
+
+    # 7열 표 형태로 그리기
+    st.markdown("### 📅 달력")
+    header = st.columns(7)
+    for i, wd in enumerate(WEEKDAYS_KO):
+        # 일요일 강조만 살짝(색은 최소)
+        if i == 6:
+            header[i].markdown(f"<div style='text-align:center;font-weight:800;'>일</div>", unsafe_allow_html=True)
+        else:
+            header[i].markdown(f"<div style='text-align:center;font-weight:800;'>{wd}</div>", unsafe_allow_html=True)
+
+    # 날짜 버튼
+    selected = st.session_state.get("selected_date")
+    if not selected:
+        selected = date(y, m, 1)
+        st.session_state["selected_date"] = selected
+
+    rows = [month_days[i:i+7] for i in range(0, len(month_days), 7)]
+    for week in rows:
+        cols = st.columns(7)
+        for i, d in enumerate(week):
+            in_month = (d.month == m)
+            ds = _to_datestr(d)
+
+            base = base_map.get(ds, "")
+            change = change_map.get(ds, "")
+            delivery = deliv_map.get(ds, "Y")
+
+            # 표시 텍스트
+            line1 = f"{d.day:02d}"
+            if not in_month:
+                # 다른 달은 흐리게
+                label = f"{line1}\n"
+            else:
+                label = f"{line1}\n"
+
+            if in_month:
+                if delivery == "N":
+                    label += "배달불요\n"
+                if change.strip():
+                    label += f"변경: {change}\n"
+                elif base.strip():
+                    label += f"{base}\n"
+
+            # 버튼 스타일: 최소한만
+            btn_kwargs = dict(use_container_width=True)
+            if not in_month:
+                cols[i].button(label, key=f"day_{ds}", disabled=True, **btn_kwargs)
+            else:
+                clicked = cols[i].button(label, key=f"day_{ds}", **btn_kwargs)
+                if clicked:
+                    st.session_state["selected_date"] = d
+                    selected = d
+    return selected
+
+
+# -----------------------------
+# 문자 생성
+# -----------------------------
+def build_sms(y: int, m: int, base_map: dict[str, str], change_map: dict[str, str], deliv_map: dict[str, str]) -> str:
+    start, end = _month_range(y, m)
+
+    lines = []
+    lines.append(f"[{y}년 {m:02d}월 도시락 주문/변경]")
+    d = start
+    while d <= end:
+        ds = _to_datestr(d)
+        # 주말은 보통 제외(필요시 바꿀 수 있음)
+        if not _is_weekend(d):
+            delivery = deliv_map.get(ds, "Y")
+            base = base_map.get(ds, "").strip()
+            change = change_map.get(ds, "").strip()
+
+            day_part = f"{m:02d}/{d.day:02d}({WEEKDAYS_KO[d.weekday()]})"
+
+            if delivery == "N":
+                lines.append(f"{day_part}: 배달불요")
+            else:
+                if change:
+                    # 기본도 같이 표시하고 싶으면 base를 붙임
+                    if base:
+                        lines.append(f"{day_part}: {base} → {change}")
+                    else:
+                        lines.append(f"{day_part}: 변경 {change}")
+                else:
+                    if base:
+                        lines.append(f"{day_part}: {base}")
+        d = date.fromordinal(d.toordinal() + 1)
+
+    return "\n".join(lines)
+
+
+# -----------------------------
+# 화면 구성
+# -----------------------------
+st.title("🍱 맘스락 식단 변경 프로그램")
+
+# 사이드바: 년/월 선택
 today = date.today()
-st.session_state.setdefault("year", today.year)
-st.session_state.setdefault("month", today.month)
-st.session_state.setdefault("selected_day", today.day)
+with st.sidebar:
+    st.subheader("설정")
+    year = st.number_input("연도", min_value=2024, max_value=2100, value=today.year, step=1)
+    month = st.number_input("월", min_value=1, max_value=12, value=today.month, step=1)
 
-st.session_state.setdefault("clear_base_input", False)
-st.session_state.setdefault("clear_change_input", False)
+    st.divider()
+    st.subheader("🖋️ 글귀(공양게) 설정")
+    gongyang_text = st.text_area(
+        "표시할 글귀 (줄바꿈 그대로)",
+        value=load_gongyang_text(),
+        height=160
+    )
+    colg1, colg2 = st.columns([1, 1])
+    with colg1:
+        gongyang_font_size = st.slider("글자 크기", 24, 60, 42, 1)
+    with colg2:
+        gongyang_align = st.selectbox("정렬", ["center", "left", "right"], index=0)
 
-# -----------------------------
-# Styles (글귀 크게+Bold / 달력 칸 동일 크기)
-# -----------------------------
-CELL_H = 128  # ✅ 달력 네모칸 높이 고정(모든 칸 동일)
+    if st.button("💾 글귀 저장", use_container_width=True):
+        save_gongyang_text(gongyang_text)
+        st.success("저장했습니다.")
 
+# 본문: 글귀 표시 (요구사항 미반영 방지: 여기서 바로 반영)
 st.markdown(
     f"""
-<link href="https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap" rel="stylesheet">
-<style>
-.block-container {{ padding-top: 0.5rem; padding-bottom: 0.6rem; }}
-
-.titlebar{{
-  margin: 0.2rem 0 0.6rem 0;
-  padding: 0.6rem 0.8rem;
-  border-radius: 16px;
-  background: rgba(0,0,0,0.03);
-  border: 1px solid rgba(0,0,0,0.06);
-}}
-.titlebar h1{{
-  margin: 0;
-  text-align: center;
-  font-weight: 900;
-  font-size: 44px;
-  letter-spacing: -1px;
-}}
-
-.hero-box{{
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: rgba(0,0,0,0.02);
-  border: 1px solid rgba(0,0,0,0.06);
-  height: 230px;
-}}
-
-.gongyang-area{{ margin-top: 26px; margin-left: 14px; }}
-.gongyang-line{{
-  font-family: "Nanum Brush Script","Apple SD Gothic Neo","Malgun Gothic",serif;
-  font-size: 42px;     /* ✅ 크게 */
-  font-weight: 900;    /* ✅ Bold */
-  line-height: 1.05;
-  letter-spacing: -0.2px;
-}}
-
-.cal-btn > button{{
-  width: 100% !important;
-  text-align: left !important;
-  border-radius: 12px !important;
-  padding: 10px 10px !important;
-  height: {CELL_H}px !important;     /* ✅ 고정 높이 */
-  min-height: {CELL_H}px !important; /* ✅ 고정 높이 */
-  border: 1px solid rgba(0,0,0,0.12) !important;
-  background: rgba(255,255,255,0.70) !important;
-  white-space: pre-line !important;
-  overflow: hidden !important;       /* ✅ 내용 길어도 칸 깨짐 방지 */
-}}
-
-.cal-btn.holiday > button{{
-  background: rgba(255,230,230,0.55) !important;
-  border-color: rgba(220,0,0,0.25) !important;
-}}
-
-.wd{{ text-align:center; font-weight:800; padding: 2px 0; }}
-.wd.sun{{ color: #d11; }}
-
-@media (max-width: 860px){{
-  .titlebar h1{{ font-size: 34px; }}
-  .hero-box{{ height: auto; }}
-  .gongyang-line{{ font-size: 36px; }}
-}}
-</style>
-""",
-    unsafe_allow_html=True,
+    <div style="
+        font-family: 'Nanum Brush Script','Apple SD Gothic Neo','Malgun Gothic',serif;
+        font-size: {gongyang_font_size}px;
+        line-height: 1.15;
+        text-align: {gongyang_align};
+        white-space: pre-line;
+        margin-top: 6px;
+        margin-bottom: 18px;
+    ">
+    {gongyang_text}
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
-# -----------------------------
-# Sidebar
-# -----------------------------
-with st.sidebar:
-    st.title("설정")
-    y = st.number_input("연도", 2020, 2100, int(st.session_state["year"]), 1, key="year_input")
-    m = st.selectbox("월", list(range(1, 13)), index=int(st.session_state["month"]) - 1, key="month_select")
-    st.session_state["year"] = int(y)
-    st.session_state["month"] = int(m)
+# 데이터 로드
+base_map = load_base_menu()
+change_map = load_change_menu()
+deliv_map = load_delivery()
+menu_index = load_menu_index()
 
-    st.divider()
-    st.subheader("데이터 백업/복원")
-    st.caption("Cloud 재시작 시 초기화될 수 있어, 백업 ZIP으로 복원합니다.")
-
-    if st.button("백업 ZIP 만들기", use_container_width=True, key="mk_backup_btn"):
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for p in [BASE_CSV, CHANGE_CSV, DELIV_CSV, MENU_CSV]:
-                if p.exists():
-                    z.write(p, arcname=f"data/{p.name}")
-        st.session_state["backup_bytes"] = buf.getvalue()
-
-    if st.session_state.get("backup_bytes"):
-        st.download_button(
-            "⬇️ 백업 ZIP 다운로드",
-            data=st.session_state["backup_bytes"],
-            file_name="momsrak_backup.zip",
-            mime="application/zip",
-            use_container_width=True,
-            key="dl_backup_btn",
-        )
-
-    up = st.file_uploader("복원 ZIP 업로드", type=["zip"], key="restore_zip")
-    if up is not None:
-        try:
-            zdata = io.BytesIO(up.read())
-            with zipfile.ZipFile(zdata, "r") as z:
-                for name in z.namelist():
-                    if name.startswith("data/") and name.endswith(".csv"):
-                        out_path = DATA_DIR / Path(name).name
-                        out_path.write_bytes(z.read(name))
-            st.success("복원 완료! 즉시 반영합니다.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"복원 실패: {e}")
-
-    st.divider()
-    st.subheader("메뉴 인덱스")
-    st.write(f"현재 메뉴 수: **{len(menu_list)}**")
-
-    new_menu = st.text_input("➕ 메뉴 추가", value="", placeholder="예: 뚝불고기", key="menu_add_input")
-    if st.button("추가", use_container_width=True, key="menu_add_btn"):
-        nm = norm(new_menu)
-        if not nm:
-            st.warning("빈 값은 추가할 수 없습니다.")
-        elif nm in menu_list:
-            st.warning("이미 존재하는 메뉴입니다.")
-        else:
-            menu_list = sorted(set(menu_list + [nm]))
-            save_csv(pd.DataFrame({"menu": menu_list}), MENU_CSV)
-            st.success("추가 완료")
-            st.rerun()
-
-# -----------------------------
-# Title
-# -----------------------------
-st.markdown(
-    """
-<div class="titlebar">
-  <h1>🍱 맘스락 식단 변경 프로그램</h1>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-# -----------------------------
-# Header: bowl + text
-# -----------------------------
-bowl = find_bowl_image()
-hc1, hc2 = st.columns([1, 3], vertical_alignment="top")
-
-with hc1:
-    st.markdown('<div class="hero-box">', unsafe_allow_html=True)
-    if bowl:
-        st.image(str(bowl), width=170)
-    else:
-        st.warning("그릇 그림 파일 없음 (gongyang_bowl.png)")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with hc2:
-    st.markdown('<div class="hero-box">', unsafe_allow_html=True)
-    st.markdown('<div class="gongyang-area">', unsafe_allow_html=True)
-    for ln in GONGYANG_TEXT_4LINES:
-        st.markdown(f"<div class='gongyang-line'>{ln}</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-st.divider()
-
-# -----------------------------
-# Calendar (1개월만 표시: monthdayscalendar / 셀 안에 표시)
-# -----------------------------
-year = int(st.session_state["year"])
-month = int(st.session_state["month"])
-holiday_map = build_holiday_map(year)
-
-cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
-weeks = cal.monthdayscalendar(year, month)  # ✅ 해당 월만(다른 달은 0)
-
-# weekday header
-hdr = st.columns(7)
-for i, wd in enumerate(WEEKDAY_NAMES):
-    cls = "wd sun" if wd == "일" else "wd"
-    hdr[i].markdown(f"<div class='{cls}'>{wd}</div>", unsafe_allow_html=True)
-
-for w in weeks:
-    cols = st.columns(7)
-    for i, daynum in enumerate(w):
-        with cols[i]:
-            if daynum == 0:
-                st.markdown(
-                    f"<div style='height:{CELL_H}px;border:1px dashed rgba(0,0,0,0.08);border-radius:12px;opacity:0.35;'></div>",
-                    unsafe_allow_html=True,
-                )
-                continue
-
-            d = date(year, month, daynum)
-            d_str = fmt_date(d)
-
-            base_v = norm(get_value(base_df, d_str, "base_menu"))
-            chg_v = norm(get_value(change_df, d_str, "change_menu"))
-            delv = norm(get_value(deliv_df, d_str, "delivery"))
-
-            # 표시 순서: 기본 → 변경 → 배달불요
-            lines = []
-            if base_v:
-                lines.append(f"🍱 {short(base_v, 12)}")
-            if chg_v:
-                lines.append(f"🔁 {short(chg_v, 12)}")
-            if delv == "SKIP":
-                lines.append("🚫 배달불요")
-
-            hname = holiday_map.get(f"{year}-{month:02d}-{daynum:02d}", "")
-            is_holiday = bool(hname) or (d.weekday() == 6)
-
-            head = f"{daynum}"
-            if is_holiday:
-                if hname:
-                    head = f"🔴 {daynum}  🎌 {hname}"
-                else:
-                    head = f"🔴 {daynum}  (일)"
-
-            label = head
-            if lines:
-                label += "\n" + "\n".join(lines)
-
-            btn_class = "cal-btn holiday" if is_holiday else "cal-btn"
-            st.markdown(f"<div class='{btn_class}'>", unsafe_allow_html=True)
-            if st.button(label, key=f"daycell_{d_str}", use_container_width=True):
-                st.session_state["selected_day"] = daynum
-            st.markdown("</div>", unsafe_allow_html=True)
-
-st.divider()
-
-# -----------------------------
-# Selected date + editor
-# -----------------------------
-selected_day = int(st.session_state["selected_day"])
-last_day = calendar.monthrange(year, month)[1]
-if selected_day > last_day:
-    selected_day = last_day
-    st.session_state["selected_day"] = selected_day
-
-selected_date = date(year, month, selected_day)
-selected_str = fmt_date(selected_date)
-
-base_key = f"base_{selected_str}"
-chg_key = f"chg_{selected_str}"
-delv_key = f"delv_{selected_str}"
-
-# 삭제 후 초기화
-if st.session_state.get("clear_base_input"):
-    st.session_state[base_key] = ""
-    st.session_state["clear_base_input"] = False
-if st.session_state.get("clear_change_input"):
-    st.session_state[chg_key] = ""
-    st.session_state["clear_change_input"] = False
-
-# 최초 로딩
-if base_key not in st.session_state:
-    st.session_state[base_key] = get_value(base_df, selected_str, "base_menu")
-if chg_key not in st.session_state:
-    st.session_state[chg_key] = get_value(change_df, selected_str, "change_menu")
-if delv_key not in st.session_state:
-    st.session_state[delv_key] = ("배달 불요" if get_value(deliv_df, selected_str, "delivery") == "SKIP" else "배달")
-
-def save_base():
-    global base_df
-    base_df = upsert(base_df, selected_str, "base_menu", norm(st.session_state.get(base_key, "")))
-    save_csv(base_df, BASE_CSV)
-    st.toast("기본메뉴 저장", icon="✅")
-    st.rerun()
-
-def delete_base():
-    global base_df
-    base_df = delete_row(base_df, selected_str)
-    save_csv(base_df, BASE_CSV)
-    st.session_state["clear_base_input"] = True
-    st.rerun()
-
-def save_change():
-    global change_df
-    change_df = upsert(change_df, selected_str, "change_menu", norm(st.session_state.get(chg_key, "")))
-    save_csv(change_df, CHANGE_CSV)
-    st.toast("변경메뉴 저장", icon="✅")
-    st.rerun()
-
-def delete_change():
-    global change_df
-    change_df = delete_row(change_df, selected_str)
-    save_csv(change_df, CHANGE_CSV)
-    st.session_state["clear_change_input"] = True
-    st.rerun()
-
-def save_delivery():
-    global deliv_df
-    choice = st.session_state.get(delv_key, "배달")
-    val = "SKIP" if choice == "배달 불요" else "DELIVER"
-    deliv_df = upsert(deliv_df, selected_str, "delivery", val)
-    save_csv(deliv_df, DELIV_CSV)
-    st.toast("배달 상태 저장", icon="✅")
-    st.rerun()
-
-def clear_delivery():
-    global deliv_df
-    deliv_df = delete_row(deliv_df, selected_str)
-    save_csv(deliv_df, DELIV_CSV)
-    st.session_state[delv_key] = "배달"
-    st.toast("배달 초기화", icon="🧹")
-    st.rerun()
-
-def on_pick_base():
-    pick = st.session_state.get(f"pick_base_{selected_str}", "(선택 안함)")
-    if pick != "(선택 안함)":
-        st.session_state[base_key] = pick
-
-def on_pick_change():
-    pick = st.session_state.get(f"pick_chg_{selected_str}", "(선택 안함)")
-    if pick != "(선택 안함)":
-        st.session_state[chg_key] = pick
-
-def build_month_sms(year_: int, month_: int) -> str:
-    last_ = calendar.monthrange(year_, month_)[1]
-    days = [d.date() for d in pd.date_range(date(year_, month_, 1), date(year_, month_, last_), freq="D")]
-
-    skip_lines, change_lines = [], []
-    for d in days:
-        d_str = fmt_date(d)
-        deliv_val = norm(get_value(deliv_df, d_str, "delivery"))
-        base_v = norm(get_value(base_df, d_str, "base_menu"))
-        chg_v = norm(get_value(change_df, d_str, "change_menu"))
-
-        if deliv_val == "SKIP":
-            skip_lines.append(f"▶ {mmdd_weekday(d)} : 배달불요")
-            continue
-        if chg_v:
-            left = base_v if base_v else "-"
-            change_lines.append(f"▶ {mmdd_weekday(d)} : {left} → {chg_v}")
-
-    out = [
-        "동약협회입니다.",
-        f"{year_}년 {month_:02d}월 도시락 변경/배달불요 내역입니다.",
-        "🚫【배달불요】",
-        *skip_lines,
-        "🔁【변경메뉴】",
-        *change_lines,
-        "감사합니다.",
-    ]
-    return "\n".join(out)
-
-st.subheader(f"선택한 날짜: {selected_str} ({WEEKDAY_NAMES[selected_date.weekday()]})")
-
-left, right = st.columns([1.15, 1])
+# 레이아웃
+left, right = st.columns([1.35, 1.0], vertical_alignment="top")
 
 with left:
-    st.markdown("### 기본메뉴")
-    if menu_list:
-        st.selectbox(
-            "인덱스 선택(기본) → 즉시 입력",
-            ["(선택 안함)"] + menu_list,
-            index=0,
-            key=f"pick_base_{selected_str}",
-            on_change=on_pick_base,
-        )
-    st.text_input("기본메뉴 입력", key=base_key)
-    b1, b2 = st.columns(2)
-    b1.button("저장", use_container_width=True, on_click=save_base, key=f"btn_save_base_{selected_str}")
-    b2.button("삭제", use_container_width=True, on_click=delete_base, key=f"btn_del_base_{selected_str}")
-
-    st.markdown("### 변경메뉴")
-    if menu_list:
-        st.selectbox(
-            "인덱스 선택(변경) → 즉시 입력",
-            ["(선택 안함)"] + menu_list,
-            index=0,
-            key=f"pick_chg_{selected_str}",
-            on_change=on_pick_change,
-        )
-    st.text_input("변경메뉴 입력", key=chg_key)
-    c1, c2 = st.columns(2)
-    c1.button("저장", use_container_width=True, on_click=save_change, key=f"btn_save_chg_{selected_str}")
-    c2.button("삭제", use_container_width=True, on_click=delete_change, key=f"btn_del_chg_{selected_str}")
-
-    st.markdown("### 배달 상태")
-    st.radio("배달/배달불요", ["배달", "배달 불요"], horizontal=True, key=delv_key)
-    d1, d2 = st.columns(2)
-    d1.button("저장", use_container_width=True, on_click=save_delivery, key=f"btn_save_delv_{selected_str}")
-    d2.button("초기화", use_container_width=True, on_click=clear_delivery, key=f"btn_clear_delv_{selected_str}")
+    selected_date = render_calendar(int(year), int(month), base_map, change_map, deliv_map)
 
 with right:
-    st.markdown("### 📩 월간 문자 출력")
-    st.text_area(
-        "복사해서 문자로 보내기",
-        value=build_month_sms(year, month),
-        height=420,
-        key=f"sms_{year}_{month}",
+    st.markdown("### 🧾 선택 날짜 편집")
+    st.write(f"선택: **{selected_date.strftime('%Y-%m-%d')} ({WEEKDAYS_KO[selected_date.weekday()]})**")
+
+    ds = _to_datestr(selected_date)
+    current_base = base_map.get(ds, "")
+    current_change = change_map.get(ds, "")
+    current_deliv = deliv_map.get(ds, "Y")
+
+    # 배달 여부
+    delivery_choice = st.radio(
+        "배달",
+        options=["배달", "배달불요"],
+        index=0 if current_deliv == "Y" else 1,
+        horizontal=True
     )
+
+    # 기본메뉴 입력(직접 입력)
+    base_input = st.text_input("기본메뉴", value=current_base)
+
+    # 변경메뉴: 인덱스 선택 + 직접입력
+    st.markdown("**변경메뉴**")
+    colc1, colc2 = st.columns([1, 1])
+    with colc1:
+        pick = st.selectbox("인덱스에서 선택", options=["(선택 없음)"] + menu_index)
+    with colc2:
+        change_input = st.text_input("또는 직접 입력", value=current_change)
+
+    if pick != "(선택 없음)":
+        change_input = pick
+
+    b1, b2, b3 = st.columns(3)
+    with b1:
+        if st.button("💾 기본메뉴 저장", use_container_width=True):
+            save_base_menu(selected_date, base_input)
+            st.success("기본메뉴 저장 완료")
+            st.rerun()
+    with b2:
+        if st.button("💾 변경메뉴 저장", use_container_width=True):
+            save_change_menu(selected_date, change_input)
+            st.success("변경메뉴 저장 완료")
+            st.rerun()
+    with b3:
+        if st.button("💾 배달 저장", use_container_width=True):
+            save_delivery(selected_date, "N" if delivery_choice == "배달불요" else "Y")
+            st.success("배달 상태 저장 완료")
+            st.rerun()
+
+    st.divider()
+
+    st.markdown("### 📚 메뉴 인덱스 관리 (삭제 포함)")
+    colm1, colm2 = st.columns([1.2, 1.0])
+
+    with colm1:
+        new_name = st.text_input("메뉴 추가", placeholder="예: 순두부찌개")
+        if st.button("➕ 인덱스에 추가", use_container_width=True):
+            nn = (new_name or "").strip()
+            if nn:
+                menu_index2 = menu_index + [nn]
+                save_menu_index(menu_index2)
+                st.success("추가했습니다.")
+                st.rerun()
+            else:
+                st.warning("메뉴명을 입력해 주세요.")
+
+    with colm2:
+        sel = st.selectbox("기존 메뉴", options=["(선택)"] + menu_index)
+        rename = st.text_input("이름 변경", placeholder="새 이름")
+        if st.button("✏️ 이름 변경", use_container_width=True):
+            if sel == "(선택)":
+                st.warning("먼저 메뉴를 선택해 주세요.")
+            else:
+                rn = (rename or "").strip()
+                if not rn:
+                    st.warning("새 이름을 입력해 주세요.")
+                else:
+                    menu_index2 = [rn if x == sel else x for x in menu_index]
+                    save_menu_index(menu_index2)
+                    st.success("변경했습니다.")
+                    st.rerun()
+
+        if st.button("🗑️ 삭제", use_container_width=True):
+            if sel == "(선택)":
+                st.warning("먼저 메뉴를 선택해 주세요.")
+            else:
+                menu_index2 = [x for x in menu_index if x != sel]
+                save_menu_index(menu_index2)
+                st.success("삭제했습니다.")
+                st.rerun()
+
+    st.divider()
+
+    st.markdown("### 📩 월 문자 생성")
+    sms_text = build_sms(int(year), int(month), base_map, change_map, deliv_map)
+    st.text_area("복사해서 문자로 보내세요", value=sms_text, height=260)
+
+st.caption("데이터 저장 위치: data/ (base_menu.csv, change_menu.csv, delivery.csv, menu_index.csv, gongyang.txt)")
