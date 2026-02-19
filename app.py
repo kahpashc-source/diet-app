@@ -1,7 +1,7 @@
 import calendar
 import io
 import zipfile
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -86,6 +86,46 @@ def find_bowl_image():
             return p
     return None
 
+
+# -----------------------------
+# Holiday helpers
+# -----------------------------
+def fixed_kr_holidays(year: int) -> dict[str, str]:
+    """고정 공휴일(양력) + 대체공휴일은 여기서 완벽 반영 어렵지만 기본은 제공.
+       정확도: 고정 공휴일 매우 높음
+    """
+    items = {
+        f"{year}-01-01": "신정",
+        f"{year}-03-01": "삼일절",
+        f"{year}-05-05": "어린이날",
+        f"{year}-06-06": "현충일",
+        f"{year}-08-15": "광복절",
+        f"{year}-10-03": "개천절",
+        f"{year}-10-09": "한글날",
+        f"{year}-12-25": "성탄절",
+    }
+    return items
+
+def try_holidays_lib(year: int) -> dict[str, str]:
+    """가능하면 holidays 패키지(KR) 사용. 없으면 빈 dict."""
+    try:
+        import holidays  # type: ignore
+        kr = holidays.KR(years=[year])
+        out = {}
+        for d, name in kr.items():
+            out[d.strftime("%Y-%m-%d")] = str(name)
+        return out
+    except Exception:
+        return {}
+
+def build_holiday_map(year: int) -> dict[str, str]:
+    """우선순위: holidays 라이브러리 > 고정 공휴일"""
+    lib = try_holidays_lib(year)
+    if lib:
+        return lib
+    return fixed_kr_holidays(year)
+
+
 # -----------------------------
 # Load data
 # -----------------------------
@@ -107,54 +147,23 @@ st.session_state.setdefault("clear_base_input", False)
 st.session_state.setdefault("clear_change_input", False)
 
 # -----------------------------
-# Styles  ✅ (CSS가 화면에 찍히지 않게: style 태그 내부만 사용)
+# Styles  (요청하신 CSS 라인들은 사용하지 않음)
 # -----------------------------
 st.markdown(
     """
 <link href="https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap" rel="stylesheet">
 <style>
 .block-container { padding-top: 0.6rem; padding-bottom: 0.6rem; }
-
 .hero-box{
   padding: 12px 14px;
   border-radius: 16px;
   background: rgba(0,0,0,0.03);
   border: 1px solid rgba(0,0,0,0.06);
 }
-
-.gongyang-wrap{
-  height: 150px;
-  display:flex;
-  flex-direction:column;
-  justify-content:center;
-  gap: 6px;
-}
 .gongyang-line{
   font-family: "Nanum Brush Script","궁서","바탕","Batang","Apple SD Gothic Neo","Malgun Gothic",serif;
   font-size: 30px;
   line-height: 1.05;
-}
-
-.week { text-align:center; font-weight: 800; padding: 2px 0; }
-
-.cell {
-  border: 1px solid rgba(0,0,0,0.12);
-  border-radius: 12px;
-  padding: 6px;
-  min-height: 96px;
-  background: rgba(255,255,255,0.70);
-}
-
-.daybtn button {
-  padding: 0.12rem 0.35rem !important;
-  min-height: 30px !important;
-  font-weight: 800 !important;
-}
-.dimday{ opacity:0.35; }
-
-@media (max-width: 860px){
-  .gongyang-wrap{ height:auto; }
-  .gongyang-line{ font-size:28px; }
 }
 </style>
 """,
@@ -209,7 +218,6 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🍽️ 메뉴 인덱스")
-    st.caption("추가/수정/삭제 후 본문 선택 목록에 반영됩니다.")
     st.write(f"현재 메뉴 수: **{len(menu_list)}**")
 
     new_menu = st.text_input("➕ 메뉴 추가", value="", placeholder="예: 뚝불고기", key="menu_add_input")
@@ -225,39 +233,16 @@ with st.sidebar:
             st.success("추가 완료")
             st.rerun()
 
-    if menu_list:
-        old = st.selectbox("✏️ 수정할 메뉴", options=menu_list, key="menu_edit_select")
-        edited = st.text_input("새 이름", value=old, key="menu_edit_input")
-        if st.button("수정 저장", use_container_width=True, key="menu_edit_btn"):
-            nv = norm(edited)
-            if not nv:
-                st.warning("빈 값으로 바꿀 수 없습니다.")
-            elif nv != old and nv in menu_list:
-                st.warning("같은 이름이 이미 있습니다.")
-            else:
-                menu_list = [nv if x == old else x for x in menu_list]
-                menu_list = sorted({x.strip() for x in menu_list if x.strip()})
-                save_csv(pd.DataFrame({"menu": menu_list}), MENU_CSV)
-                st.success("수정 완료")
-                st.rerun()
-
-        dlt = st.selectbox("🗑️ 삭제할 메뉴", options=menu_list, key="menu_del_select")
-        if st.button("삭제", use_container_width=True, key="menu_del_btn"):
-            menu_list = [x for x in menu_list if x != dlt]
-            save_csv(pd.DataFrame({"menu": menu_list}), MENU_CSV)
-            st.success("삭제 완료")
-            st.rerun()
-
 # -----------------------------
-# Header ✅ (columns로 좌우 배치 + 높이 맞춤)
+# Header (상단 높이/상단선 일치: top 정렬)
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
 
 bowl = find_bowl_image()
-hc1, hc2 = st.columns([1, 3], vertical_alignment="center")
+hc1, hc2 = st.columns([1, 3], vertical_alignment="top")
 
 with hc1:
-    st.markdown('<div class="hero-box">', unsafe_allow_html=True)
+    st.markdown('<div class="hero-box" style="padding-top:12px;">', unsafe_allow_html=True)
     if bowl:
         st.image(str(bowl), width=150)
     else:
@@ -265,27 +250,39 @@ with hc1:
     st.markdown("</div>", unsafe_allow_html=True)
 
 with hc2:
-    st.markdown('<div class="hero-box">', unsafe_allow_html=True)
-    st.markdown('<div class="gongyang-wrap">', unsafe_allow_html=True)
+    st.markdown('<div class="hero-box" style="padding-top:12px;">', unsafe_allow_html=True)
     for ln in GONGYANG_TEXT_4LINES:
         st.markdown(f"<div class='gongyang-line'>{ln}</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.divider()
 
 # -----------------------------
-# Calendar ✅ (정확한 요일 정렬 + 표시 순서: 기본→변경→배달불요)
+# Calendar (휴일/명절 빨간색 표시)
 # -----------------------------
 year = int(st.session_state["year"])
 month = int(st.session_state["month"])
+holiday_map = build_holiday_map(year)  # { "YYYY-MM-DD": "휴일명" }
 
 cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
 weeks = cal.monthdatescalendar(year, month)
 
+# 요일 헤더: 일요일은 빨강
 hdr = st.columns(7)
 for i, wd in enumerate(WEEKDAY_NAMES):
-    hdr[i].markdown(f'<div class="week">{wd}</div>', unsafe_allow_html=True)
+    if wd == "일":
+        hdr[i].markdown("<div style='text-align:center;font-weight:800;color:#d11;'>일</div>", unsafe_allow_html=True)
+    else:
+        hdr[i].markdown(f"<div style='text-align:center;font-weight:800;'>{wd}</div>", unsafe_allow_html=True)
+
+def is_sunday(d: date) -> bool:
+    return d.weekday() == 6
+
+def is_holiday(d: date) -> bool:
+    return fmt_date(d) in holiday_map
+
+def holiday_name(d: date) -> str:
+    return holiday_map.get(fmt_date(d), "")
 
 for w in weeks:
     cols = st.columns(7)
@@ -297,24 +294,47 @@ for w in weeks:
         chg_v = norm(get_value(change_df, d_str, "change_menu"))
         delv = norm(get_value(deliv_df, d_str, "delivery"))
 
+        # 표시 순서: 기본 → 변경 → 배달불요
+        lines = []
+        if base_v:
+            lines.append(f"🍱 {short(base_v, 12)}")
+        if chg_v:
+            lines.append(f"🔁 {short(chg_v, 12)}")
+        if delv == "SKIP":
+            lines.append("🚫 배달불요")
+
+        # 휴일 표시(빨간색)
+        hname = holiday_name(d)
+        holiday_flag = is_holiday(d) or is_sunday(d)
+        date_color = "#d11" if holiday_flag else "#111"
+        bg = "rgba(255,230,230,0.55)" if holiday_flag else "rgba(255,255,255,0.70)"
+        opacity = "0.35" if not is_current_month else "1.0"
+
         with cols[i]:
-            st.markdown('<div class="cell">', unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='border:1px solid rgba(0,0,0,0.12);border-radius:12px;padding:6px;"
+                f"min-height:100px;background:{bg};opacity:{opacity};'>",
+                unsafe_allow_html=True,
+            )
 
             if is_current_month:
-                st.markdown('<div class="daybtn">', unsafe_allow_html=True)
-                if st.button(f"{d.day}", key=f"day_{d_str}", use_container_width=True):
+                # 날짜 버튼은 그대로 두되, 날짜 텍스트는 위에 빨간색으로 별도 표기
+                st.markdown(
+                    f"<div style='font-weight:900;color:{date_color};margin-bottom:2px;'>{d.day}</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("선택", key=f"pick_{d_str}", use_container_width=True):
                     st.session_state["selected_day"] = d.day
-                st.markdown("</div>", unsafe_allow_html=True)
             else:
-                st.markdown(f"<div class='dimday'><b>{d.day}</b></div>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<div style='font-weight:900;color:{date_color};margin-bottom:2px;'>{d.day}</div>",
+                    unsafe_allow_html=True,
+                )
 
-            lines = []
-            if base_v:
-                lines.append(f"🍱 {short(base_v, 12)}")
-            if chg_v:
-                lines.append(f"🔁 {short(chg_v, 12)}")
-            if delv == "SKIP":
-                lines.append("🚫 배달불요")
+            if hname:
+                st.markdown(f"<div style='color:#d11;font-size:12px;font-weight:800;'>🎌 {hname}</div>", unsafe_allow_html=True)
+            elif is_sunday(d):
+                st.markdown("<div style='color:#d11;font-size:12px;font-weight:800;'>일요일</div>", unsafe_allow_html=True)
 
             if lines:
                 st.markdown(
@@ -347,7 +367,6 @@ delv_key = f"delv_{selected_str}"
 if st.session_state.get("clear_base_input"):
     st.session_state[base_key] = ""
     st.session_state["clear_base_input"] = False
-
 if st.session_state.get("clear_change_input"):
     st.session_state[chg_key] = ""
     st.session_state["clear_change_input"] = False
