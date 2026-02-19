@@ -136,74 +136,74 @@ st.session_state.setdefault("clear_base_input", False)
 st.session_state.setdefault("clear_change_input", False)
 
 # -----------------------------
-# Styles
+# Styles (글귀 크게+Bold / 달력 칸 동일 크기)
 # -----------------------------
+CELL_H = 128  # ✅ 달력 네모칸 높이 고정(모든 칸 동일)
+
 st.markdown(
-    """
+    f"""
 <link href="https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap" rel="stylesheet">
 <style>
-.block-container { padding-top: 0.5rem; padding-bottom: 0.6rem; }
+.block-container {{ padding-top: 0.5rem; padding-bottom: 0.6rem; }}
 
-.titlebar{
+.titlebar{{
   margin: 0.2rem 0 0.6rem 0;
   padding: 0.6rem 0.8rem;
   border-radius: 16px;
   background: rgba(0,0,0,0.03);
   border: 1px solid rgba(0,0,0,0.06);
-}
-.titlebar h1{
+}}
+.titlebar h1{{
   margin: 0;
   text-align: center;
   font-weight: 900;
   font-size: 44px;
   letter-spacing: -1px;
-}
+}}
 
-.hero-box{
+.hero-box{{
   padding: 14px 16px;
   border-radius: 16px;
   background: rgba(0,0,0,0.02);
   border: 1px solid rgba(0,0,0,0.06);
-  height: 220px;
-}
-.gongyang-area{
-  margin-top: 18px;        /* ✅ 글귀가 너무 위로 붙지 않게 */
-  margin-left: 10px;       /* ✅ 조금 좌측으로 */
-}
-.gongyang-line{
-  font-family: "Nanum Brush Script","궁서","바탕","Batang","Apple SD Gothic Neo","Malgun Gothic",serif;
-  font-size: 36px;         /* ✅ 조금 크게 */
-  font-weight: 800;        /* ✅ 굵게 */
-  line-height: 1.08;
-}
+  height: 230px;
+}}
 
-.cal-btn > button{
+.gongyang-area{{ margin-top: 26px; margin-left: 14px; }}
+.gongyang-line{{
+  font-family: "Nanum Brush Script","Apple SD Gothic Neo","Malgun Gothic",serif;
+  font-size: 42px;     /* ✅ 크게 */
+  font-weight: 900;    /* ✅ Bold */
+  line-height: 1.05;
+  letter-spacing: -0.2px;
+}}
+
+.cal-btn > button{{
   width: 100% !important;
   text-align: left !important;
   border-radius: 12px !important;
   padding: 10px 10px !important;
-  min-height: 106px !important;
+  height: {CELL_H}px !important;     /* ✅ 고정 높이 */
+  min-height: {CELL_H}px !important; /* ✅ 고정 높이 */
   border: 1px solid rgba(0,0,0,0.12) !important;
   background: rgba(255,255,255,0.70) !important;
-  white-space: pre-line !important; /* ✅ 줄바꿈 표시 */
-}
-.cal-btn.holiday > button{
+  white-space: pre-line !important;
+  overflow: hidden !important;       /* ✅ 내용 길어도 칸 깨짐 방지 */
+}}
+
+.cal-btn.holiday > button{{
   background: rgba(255,230,230,0.55) !important;
   border-color: rgba(220,0,0,0.25) !important;
-}
+}}
 
-.wd{
-  text-align:center;
-  font-weight:800;
-  padding: 2px 0;
-}
-.wd.sun{ color: #d11; }
+.wd{{ text-align:center; font-weight:800; padding: 2px 0; }}
+.wd.sun{{ color: #d11; }}
 
-@media (max-width: 860px){
-  .titlebar h1{ font-size: 34px; }
-  .hero-box{ height: auto; }
-  .gongyang-line{ font-size: 32px; }
-}
+@media (max-width: 860px){{
+  .titlebar h1{{ font-size: 34px; }}
+  .hero-box{{ height: auto; }}
+  .gongyang-line{{ font-size: 36px; }}
+}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -273,7 +273,7 @@ with st.sidebar:
             st.rerun()
 
 # -----------------------------
-# Title (잘 보이도록 별도 타이틀바)
+# Title
 # -----------------------------
 st.markdown(
     """
@@ -285,7 +285,7 @@ st.markdown(
 )
 
 # -----------------------------
-# Header: bowl + text (상단 높이 일치)
+# Header: bowl + text
 # -----------------------------
 bowl = find_bowl_image()
 hc1, hc2 = st.columns([1, 3], vertical_alignment="top")
@@ -309,14 +309,14 @@ with hc2:
 st.divider()
 
 # -----------------------------
-# Calendar (1개월만 표시: monthdayscalendar 사용 / 셀 클릭=날짜 선택)
+# Calendar (1개월만 표시: monthdayscalendar / 셀 안에 표시)
 # -----------------------------
 year = int(st.session_state["year"])
 month = int(st.session_state["month"])
 holiday_map = build_holiday_map(year)
 
 cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
-weeks = cal.monthdayscalendar(year, month)  # ✅ 1개월만(다른달은 0으로 공백)
+weeks = cal.monthdayscalendar(year, month)  # ✅ 해당 월만(다른 달은 0)
 
 # weekday header
 hdr = st.columns(7)
@@ -324,25 +324,13 @@ for i, wd in enumerate(WEEKDAY_NAMES):
     cls = "wd sun" if wd == "일" else "wd"
     hdr[i].markdown(f"<div class='{cls}'>{wd}</div>", unsafe_allow_html=True)
 
-def is_sunday_daynum(daynum: int) -> bool:
-    if daynum == 0:
-        return False
-    d = date(year, month, daynum)
-    return d.weekday() == 6
-
-def holiday_name(daynum: int) -> str:
-    if daynum == 0:
-        return ""
-    return holiday_map.get(f"{year}-{month:02d}-{daynum:02d}", "")
-
 for w in weeks:
     cols = st.columns(7)
     for i, daynum in enumerate(w):
         with cols[i]:
             if daynum == 0:
-                # 공백(다른 달 날짜는 표시하지 않음)
                 st.markdown(
-                    "<div style='height:106px;border:1px dashed rgba(0,0,0,0.08);border-radius:12px;opacity:0.35;'></div>",
+                    f"<div style='height:{CELL_H}px;border:1px dashed rgba(0,0,0,0.08);border-radius:12px;opacity:0.35;'></div>",
                     unsafe_allow_html=True,
                 )
                 continue
@@ -363,12 +351,11 @@ for w in weeks:
             if delv == "SKIP":
                 lines.append("🚫 배달불요")
 
-            hname = holiday_name(daynum)
+            hname = holiday_map.get(f"{year}-{month:02d}-{daynum:02d}", "")
             is_holiday = bool(hname) or (d.weekday() == 6)
+
             head = f"{daynum}"
             if is_holiday:
-                # 빨간색 표현은 버튼 라벨에서 제한이 있어 🔴로 명확히 표시
-                # (배경은 CSS로 붉게 처리)
                 if hname:
                     head = f"🔴 {daynum}  🎌 {hname}"
                 else:
