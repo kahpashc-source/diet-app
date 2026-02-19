@@ -14,7 +14,6 @@ import streamlit as st
 # -----------------------------
 st.set_page_config(page_title="맘스락 식단 변경 프로그램", layout="wide")
 
-# 폴더/파일
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -24,18 +23,19 @@ DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 GONGYANG_PATH = DATA_DIR / "gongyang.txt"           # text file
 
-# ✅ 그릇 이미지 파일명 (원하시면 여기만 바꾸면 됨)
-BOWL_IMAGE_PATH = Path("gongyang_bowl.png")  # 프로젝트 폴더(app.py와 같은 위치) 기준
+# ✅ 그릇 이미지 파일명 (프로젝트 폴더(app.py)와 같은 위치)
+BOWL_IMAGE_PATH = Path("gongyang_bowl.png")
 
 WEEKDAYS_KO = ["월", "화", "수", "목", "금", "토", "일"]
 
 # -----------------------------
-# 폰트 import (Noto Sans KR / 붓글씨 계열)
+# 폰트 import (Noto Sans KR / 붓글씨)
 # -----------------------------
 st.markdown(
     """
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&family=Nanum+Brush+Script&display=swap');
+      .gongyang-wrap{ width:100%; }
     </style>
     """,
     unsafe_allow_html=True
@@ -243,8 +243,8 @@ def build_sms(y: int, m: int, base_map: dict[str, str], change_map: dict[str, st
             delivery = deliv_map.get(ds, "Y")
             base = base_map.get(ds, "").strip()
             change = change_map.get(ds, "").strip()
-
             day_part = f"{m:02d}/{d.day:02d}({WEEKDAYS_KO[d.weekday()]})"
+
             if delivery == "N":
                 lines.append(f"{day_part}: 배달불요")
             else:
@@ -285,43 +285,47 @@ with st.sidebar:
         ["Noto Sans KR (기본)", "붓글씨 (Nanum Brush Script)"],
         index=1
     )
-
     gongyang_font_size = st.slider("글자 크기", 18, 64, 42, 1)
-    gongyang_align = st.selectbox("정렬", ["center", "left", "right"], index=0)
+    gongyang_align = st.selectbox("정렬", ["left", "center", "right"], index=0)
 
     if st.button("💾 글귀 저장", use_container_width=True):
         save_gongyang_text(gongyang_text)
         st.success("저장했습니다.")
 
-# ✅ 그릇 그림 + 글귀(변경 가능) 표시 영역
-font_family = "Noto Sans KR, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif" \
-    if font_choice.startswith("Noto") else \
-    "'Nanum Brush Script', 'Apple SD Gothic Neo', 'Malgun Gothic', serif"
+# 폰트 패밀리
+font_family = (
+    "Noto Sans KR, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif"
+    if font_choice.startswith("Noto")
+    else "'Nanum Brush Script', 'Apple SD Gothic Neo', 'Malgun Gothic', serif"
+)
 
-# 가운데 정렬로 “그릇 + 글귀” 묶어서 보여주기
-colA, colB, colC = st.columns([1, 2.2, 1])
-with colB:
+# ✅ 상단: 좌(그릇 그림) / 우(글귀)
+top_left, top_right = st.columns([1.0, 1.6], vertical_alignment="center")
+
+with top_left:
     if BOWL_IMAGE_PATH.exists():
         st.image(str(BOWL_IMAGE_PATH), use_container_width=True)
     else:
         st.info("그릇 이미지 파일이 없습니다. 프로젝트 폴더에 'gongyang_bowl.png' 파일을 넣어 주세요.")
 
+with top_right:
     st.markdown(
         f"""
-        <div style="
+        <div class="gongyang-wrap" style="
             font-family: {font_family};
             font-size: {gongyang_font_size}px;
             line-height: 1.15;
             text-align: {gongyang_align};
             white-space: pre-line;
-            margin-top: 10px;
-            margin-bottom: 18px;
+            padding-top: 6px;
         ">
         {gongyang_text}
         </div>
         """,
         unsafe_allow_html=True
     )
+
+st.divider()
 
 # 데이터 로드
 base_map = load_base_menu()
