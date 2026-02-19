@@ -71,10 +71,6 @@ def _month_range(y: int, m: int) -> tuple[date, date]:
     return date(y, m, 1), date(y, m, last)
 
 
-def _is_weekend(d: date) -> bool:
-    return d.weekday() >= 5  # 토/일
-
-
 # -----------------------------
 # 데이터 로드/저장
 # -----------------------------
@@ -190,10 +186,7 @@ def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[s
     st.markdown("### 📅 달력")
     header = st.columns(7)
     for i, wd in enumerate(WEEKDAYS_KO):
-        header[i].markdown(
-            f"<div style='text-align:center;font-weight:800;'>{wd}</div>",
-            unsafe_allow_html=True
-        )
+        header[i].markdown(f"<div style='text-align:center;font-weight:800;'>{wd}</div>", unsafe_allow_html=True)
 
     selected = st.session_state.get("selected_date")
     if not selected:
@@ -230,31 +223,54 @@ def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[s
 
 
 # -----------------------------
-# 문자 생성
+# 문자 생성 (요청 형식)
 # -----------------------------
 def build_sms(y: int, m: int, base_map: dict[str, str], change_map: dict[str, str], deliv_map: dict[str, str]) -> str:
     start, end = _month_range(y, m)
-    lines = [f"[{y}년 {m:02d}월 도시락 주문/변경]"]
+
+    # 1) 배달불요 목록 (월 전체: 주말 포함, delivery == N 인 날만)
+    no_delivery = []
+    # 2) 변경메뉴 목록 (change_menu가 존재하는 날만)
+    changes = []
 
     d = start
     while d <= end:
         ds = _to_datestr(d)
-        if not _is_weekend(d):
-            delivery = deliv_map.get(ds, "Y")
-            base = base_map.get(ds, "").strip()
-            change = change_map.get(ds, "").strip()
-            day_part = f"{m:02d}/{d.day:02d}({WEEKDAYS_KO[d.weekday()]})"
+        wd = WEEKDAYS_KO[d.weekday()]
+        mmdd = f"{m:02d}/{d.day:02d}({wd})"
 
-            if delivery == "N":
-                lines.append(f"{day_part}: 배달불요")
+        delivery = deliv_map.get(ds, "Y")
+        base = base_map.get(ds, "").strip()
+        change = change_map.get(ds, "").strip()
+
+        if delivery == "N":
+            no_delivery.append(f"▶ {mmdd} : 배달불요")
+
+        if change:
+            if base:
+                changes.append(f"▶ {mmdd} : {base} → {change}")
             else:
-                if change:
-                    lines.append(f"{day_part}: {base + ' → ' if base else ''}{change}")
-                else:
-                    if base:
-                        lines.append(f"{day_part}: {base}")
+                changes.append(f"▶ {mmdd} : {change}")  # 기본이 없으면 변경만
+
         d = date.fromordinal(d.toordinal() + 1)
 
+    lines = []
+    lines.append("동약협회입니다.")
+    lines.append(f"{y}년 {m:02d}월 도시락 변경/배달불요 내역입니다.")
+
+    lines.append("🚫【배달불요】")
+    if no_delivery:
+        lines.extend(no_delivery)
+    else:
+        lines.append("▶ 없음")
+
+    lines.append("🔁【변경메뉴】")
+    if changes:
+        lines.extend(changes)
+    else:
+        lines.append("▶ 없음")
+
+    lines.append("감사합니다.")
     return "\n".join(lines)
 
 
@@ -273,18 +289,9 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🖋️ 글귀(공양게) 설정")
+    gongyang_text = st.text_area("표시할 글귀 (줄바꿈 그대로)", value=load_gongyang_text(), height=160)
 
-    gongyang_text = st.text_area(
-        "표시할 글귀 (줄바꿈 그대로)",
-        value=load_gongyang_text(),
-        height=160
-    )
-
-    font_choice = st.selectbox(
-        "서체 선택",
-        ["Noto Sans KR (기본)", "붓글씨 (Nanum Brush Script)"],
-        index=1
-    )
+    font_choice = st.selectbox("서체 선택", ["Noto Sans KR (기본)", "붓글씨 (Nanum Brush Script)"], index=1)
     gongyang_font_size = st.slider("글자 크기", 18, 64, 42, 1)
     gongyang_align = st.selectbox("정렬", ["left", "center", "right"], index=0)
 
@@ -348,24 +355,30 @@ with right:
     current_change = change_map.get(ds, "")
     current_deliv = deliv_map.get(ds, "Y")
 
-    delivery_choice = st.radio(
-        "배달",
-        options=["배달", "배달불요"],
-        index=0 if current_deliv == "Y" else 1,
-        horizontal=True
-    )
+    # 배달 여부
+    delivery_choice = st.radio("배달", options=["배달", "배달불요"], index=0 if current_deliv == "Y" else 1, horizontal=True)
 
-    base_input = st.text_input("기본메뉴", value=current_base)
+    # ✅ 기본메뉴: 인덱스 선택 + 직접입력 (요청 반영)
+    st.markdown("**기본메뉴**")
+    colb1, colb2 = st.columns([1, 1])
+    with colb1:
+        base_pick = st.selectbox("인덱스에서 선택(기본)", options=["(선택 없음)"] + menu_index, key="base_pick")
+    with colb2:
+        base_input = st.text_input("또는 직접 입력(기본)", value=current_base, key="base_input")
 
+    if base_pick != "(선택 없음)":
+        base_input = base_pick
+
+    # 변경메뉴: 인덱스 선택 + 직접입력
     st.markdown("**변경메뉴**")
     colc1, colc2 = st.columns([1, 1])
     with colc1:
-        pick = st.selectbox("인덱스에서 선택", options=["(선택 없음)"] + menu_index)
+        change_pick = st.selectbox("인덱스에서 선택(변경)", options=["(선택 없음)"] + menu_index, key="change_pick")
     with colc2:
-        change_input = st.text_input("또는 직접 입력", value=current_change)
+        change_input = st.text_input("또는 직접 입력(변경)", value=current_change, key="change_input")
 
-    if pick != "(선택 없음)":
-        change_input = pick
+    if change_pick != "(선택 없음)":
+        change_input = change_pick
 
     b1, b2, b3 = st.columns(3)
     with b1:
@@ -390,8 +403,8 @@ with right:
     colm1, colm2 = st.columns([1.2, 1.0])
 
     with colm1:
-        new_name = st.text_input("메뉴 추가", placeholder="예: 순두부찌개")
-        if st.button("➕ 인덱스에 추가", use_container_width=True):
+        new_name = st.text_input("메뉴 추가", placeholder="예: 순두부찌개", key="idx_new")
+        if st.button("➕ 인덱스에 추가", use_container_width=True, key="idx_add"):
             nn = (new_name or "").strip()
             if nn:
                 save_menu_index(menu_index + [nn])
@@ -401,10 +414,10 @@ with right:
                 st.warning("메뉴명을 입력해 주세요.")
 
     with colm2:
-        sel = st.selectbox("기존 메뉴", options=["(선택)"] + menu_index)
-        rename = st.text_input("이름 변경", placeholder="새 이름")
+        sel = st.selectbox("기존 메뉴", options=["(선택)"] + menu_index, key="idx_sel")
+        rename = st.text_input("이름 변경", placeholder="새 이름", key="idx_rename")
 
-        if st.button("✏️ 이름 변경", use_container_width=True):
+        if st.button("✏️ 이름 변경", use_container_width=True, key="idx_rename_btn"):
             if sel == "(선택)":
                 st.warning("먼저 메뉴를 선택해 주세요.")
             else:
@@ -416,7 +429,7 @@ with right:
                     st.success("변경했습니다.")
                     st.rerun()
 
-        if st.button("🗑️ 삭제", use_container_width=True):
+        if st.button("🗑️ 삭제", use_container_width=True, key="idx_del_btn"):
             if sel == "(선택)":
                 st.warning("먼저 메뉴를 선택해 주세요.")
             else:
@@ -426,8 +439,8 @@ with right:
 
     st.divider()
 
-    st.markdown("### 📩 월 문자 생성")
+    st.markdown("### 📩 월 문자 생성 (요청 형식)")
     sms_text = build_sms(int(year), int(month), base_map, change_map, deliv_map)
-    st.text_area("복사해서 문자로 보내세요", value=sms_text, height=260)
+    st.text_area("복사해서 문자로 보내세요", value=sms_text, height=320)
 
 st.caption("데이터 저장 위치: data/ (base_menu.csv, change_menu.csv, delivery.csv, menu_index.csv, gongyang.txt)")
