@@ -86,7 +86,6 @@ def find_bowl_image():
             return p
     return None
 
-
 # -----------------------------
 # Load data
 # -----------------------------
@@ -95,7 +94,6 @@ change_df = load_csv(CHANGE_CSV, ["date", "change_menu"])
 deliv_df = load_csv(DELIV_CSV, ["date", "delivery"])
 menu_df = load_csv(MENU_CSV, ["menu"])
 menu_list = sorted({m.strip() for m in menu_df["menu"].tolist() if m.strip()})
-
 
 # -----------------------------
 # State init
@@ -108,10 +106,8 @@ st.session_state.setdefault("selected_day", today.day)
 st.session_state.setdefault("clear_base_input", False)
 st.session_state.setdefault("clear_change_input", False)
 
-
 # -----------------------------
-# Styles
-#  - 요청하신 .lines / .panel 관련 CSS는 "아예 만들지 않음"
+# Styles  ✅ (CSS가 화면에 찍히지 않게: style 태그 내부만 사용)
 # -----------------------------
 st.markdown(
     """
@@ -119,28 +115,18 @@ st.markdown(
 <style>
 .block-container { padding-top: 0.6rem; padding-bottom: 0.6rem; }
 
-.hero-wrap{
-  display:flex;
-  align-items:center;
-  gap:18px;
+.hero-box{
   padding: 12px 14px;
   border-radius: 16px;
   background: rgba(0,0,0,0.03);
   border: 1px solid rgba(0,0,0,0.06);
-  height: 150px;           /* ✅ 그림/글귀 높이 맞춤 */
 }
-.hero-left{
-  width: 160px;
-  height: 150px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-}
-.hero-right{
+
+.gongyang-wrap{
   height: 150px;
   display:flex;
   flex-direction:column;
-  justify-content:center;  /* ✅ 4줄이 그릇 높이 내 중앙정렬 */
+  justify-content:center;
   gap: 6px;
 }
 .gongyang-line{
@@ -167,8 +153,7 @@ st.markdown(
 .dimday{ opacity:0.35; }
 
 @media (max-width: 860px){
-  .hero-wrap{ height:auto; }
-  .hero-left, .hero-right{ height:auto; }
+  .gongyang-wrap{ height:auto; }
   .gongyang-line{ font-size:28px; }
 }
 </style>
@@ -188,7 +173,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("💾 데이터 백업/복원")
-    st.caption("Streamlit Cloud 재시작으로 초기화될 수 있어, 백업 ZIP으로 복원 가능하게 합니다.")
+    st.caption("Cloud 재시작으로 초기화될 수 있어, 백업 ZIP으로 복원 가능하게 합니다.")
 
     if st.button("백업 ZIP 만들기", use_container_width=True, key="mk_backup_btn"):
         buf = io.BytesIO()
@@ -263,40 +248,40 @@ with st.sidebar:
             st.success("삭제 완료")
             st.rerun()
 
-
 # -----------------------------
-# Header
+# Header ✅ (columns로 좌우 배치 + 높이 맞춤)
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
 
 bowl = find_bowl_image()
+hc1, hc2 = st.columns([1, 3], vertical_alignment="center")
 
-st.markdown('<div class="hero-wrap">', unsafe_allow_html=True)
-st.markdown('<div class="hero-left">', unsafe_allow_html=True)
-if bowl:
-    st.image(str(bowl), width=140)
-else:
-    st.warning("그릇 그림 파일 없음 (gongyang_bowl.png)")
-st.markdown("</div>", unsafe_allow_html=True)
+with hc1:
+    st.markdown('<div class="hero-box">', unsafe_allow_html=True)
+    if bowl:
+        st.image(str(bowl), width=150)
+    else:
+        st.warning("그릇 그림 파일 없음 (gongyang_bowl.png)")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown('<div class="hero-right">', unsafe_allow_html=True)
-for ln in GONGYANG_TEXT_4LINES:
-    st.markdown(f"<div class='gongyang-line'>{ln}</div>", unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
+with hc2:
+    st.markdown('<div class="hero-box">', unsafe_allow_html=True)
+    st.markdown('<div class="gongyang-wrap">', unsafe_allow_html=True)
+    for ln in GONGYANG_TEXT_4LINES:
+        st.markdown(f"<div class='gongyang-line'>{ln}</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 st.divider()
 
-
 # -----------------------------
-# Calendar (정확한 요일 정렬)
-#  - monthdatescalendar() : 항상 주 단위로 정확히 맞음
+# Calendar ✅ (정확한 요일 정렬 + 표시 순서: 기본→변경→배달불요)
 # -----------------------------
 year = int(st.session_state["year"])
 month = int(st.session_state["month"])
 
-cal = calendar.Calendar(firstweekday=0)  # 월요일 시작(0)
-weeks = cal.monthdatescalendar(year, month)  # ✅ 달력 정확성 핵심
+cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
+weeks = cal.monthdatescalendar(year, month)
 
 hdr = st.columns(7)
 for i, wd in enumerate(WEEKDAY_NAMES):
@@ -306,8 +291,6 @@ for w in weeks:
     cols = st.columns(7)
     for i, d in enumerate(w):
         d_str = fmt_date(d)
-
-        # 다른 달 날짜는 표시만(클릭 버튼 안 만듦)
         is_current_month = (d.month == month)
 
         base_v = norm(get_value(base_df, d_str, "base_menu"))
@@ -325,8 +308,6 @@ for w in weeks:
             else:
                 st.markdown(f"<div class='dimday'><b>{d.day}</b></div>", unsafe_allow_html=True)
 
-            # ✅ 표시 순서: 기본 → 변경 → 배달불요 (위→아래)
-            # (변경메뉴가 있을 때도 이 순서 유지)
             lines = []
             if base_v:
                 lines.append(f"🍱 {short(base_v, 12)}")
@@ -335,11 +316,10 @@ for w in weeks:
             if delv == "SKIP":
                 lines.append("🚫 배달불요")
 
-            # 라인 출력(요청하신 .lines CSS 없이, 인라인 스타일로만)
             if lines:
                 st.markdown(
                     "<div style='margin-top:4px;font-size:12px;line-height:1.15;opacity:0.92;'>"
-                    + "".join(f"<div>{x}</div>" for x in lines)
+                    + "".join(f"<div style='margin:2px 0'>{x}</div>" for x in lines)
                     + "</div>",
                     unsafe_allow_html=True,
                 )
@@ -347,7 +327,6 @@ for w in weeks:
             st.markdown("</div>", unsafe_allow_html=True)
 
 st.divider()
-
 
 # -----------------------------
 # Selected date + editor
@@ -365,7 +344,6 @@ base_key = f"base_{selected_str}"
 chg_key = f"chg_{selected_str}"
 delv_key = f"delv_{selected_str}"
 
-# 삭제 후 초기화 플래그 (위젯 생성 전)
 if st.session_state.get("clear_base_input"):
     st.session_state[base_key] = ""
     st.session_state["clear_base_input"] = False
@@ -374,14 +352,12 @@ if st.session_state.get("clear_change_input"):
     st.session_state[chg_key] = ""
     st.session_state["clear_change_input"] = False
 
-# 키 없을 때만 초기값
 if base_key not in st.session_state:
     st.session_state[base_key] = get_value(base_df, selected_str, "base_menu")
 if chg_key not in st.session_state:
     st.session_state[chg_key] = get_value(change_df, selected_str, "change_menu")
 if delv_key not in st.session_state:
     st.session_state[delv_key] = ("배달 불요" if get_value(deliv_df, selected_str, "delivery") == "SKIP" else "배달")
-
 
 def save_base():
     global base_df
@@ -428,7 +404,6 @@ def clear_delivery():
     st.toast("배달 초기화", icon="🧹")
     st.rerun()
 
-# 메뉴 선택 즉시 입력(동선 최소화)
 def on_pick_base():
     pick = st.session_state.get(f"pick_base_{selected_str}", "(선택 안함)")
     if pick != "(선택 안함)":
@@ -467,7 +442,6 @@ def build_month_sms(year_: int, month_: int) -> str:
         "감사합니다.",
     ]
     return "\n".join(out)
-
 
 st.subheader(f"선택한 날짜: {selected_str} ({WEEKDAY_NAMES[selected_date.weekday()]})")
 
