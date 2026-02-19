@@ -35,60 +35,6 @@ st.markdown(
     """
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&family=Nanum+Brush+Script&display=swap');
-
-      /* ---- 캘린더 카드 스타일 ---- */
-      .cal-grid{ width:100%; }
-      .cal-wd{
-        text-align:center; font-weight:900; padding:6px 0;
-        font-family: "Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
-      }
-      .cal-card{
-        display:block;
-        border-radius:14px;
-        padding:10px 10px;
-        border:1px solid rgba(0,0,0,0.10);
-        background: rgba(0,0,0,0.02);
-        min-height:110px;
-        text-decoration:none !important;
-        color: inherit !important;
-        overflow:hidden;
-        box-sizing:border-box;
-      }
-      .cal-card:hover{ border-color: rgba(0,0,0,0.22); }
-
-      .cal-card.out{
-        opacity:0.35;
-        background: rgba(0,0,0,0.01);
-      }
-      .cal-card.sel{
-        border:2px solid rgba(0,0,0,0.55);
-      }
-
-      .cal-card.nd{ /* 배달불요 */
-        background: rgba(255, 210, 210, 0.55);
-        border-color: rgba(220, 0, 0, 0.25);
-      }
-      .cal-card.ch{ /* 변경메뉴 */
-        background: rgba(255, 245, 200, 0.65);
-        border-color: rgba(200, 150, 0, 0.25);
-      }
-
-      .cal-day{
-        font-weight:900;
-        font-family:"Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
-        margin-bottom:6px;
-      }
-      .cal-lines{
-        font-size:12px;
-        line-height:1.25;
-        white-space:pre-line;
-        font-family:"Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
-      }
-
-      @media (max-width: 860px){
-        .cal-card{ min-height: 96px; padding:8px; }
-        .cal-lines{ font-size:11px; }
-      }
     </style>
     """,
     unsafe_allow_html=True
@@ -117,13 +63,6 @@ def _save_csv(path: Path, df: pd.DataFrame) -> None:
 
 def _to_datestr(d: date) -> str:
     return d.isoformat()
-
-
-def _parse_datestr(s: str) -> date | None:
-    try:
-        return datetime.strptime(str(s), "%Y-%m-%d").date()
-    except Exception:
-        return None
 
 
 def _month_range(y: int, m: int) -> tuple[date, date]:
@@ -237,31 +176,28 @@ def save_gongyang_text(text: str) -> None:
 
 
 # -----------------------------
-# 달력(카드 클릭) - query param 방식
+# 달력(버튼 방식) - 새 창 열림 방지
 # -----------------------------
-def set_selected_date(d: date) -> None:
-    st.query_params["d"] = _to_datestr(d)
-
-
-def get_selected_date_fallback(y: int, m: int) -> date:
-    qp = st.query_params.get("d")
-    if qp:
-        d = _parse_datestr(qp)
-        if d and d.year == y and d.month == m:
-            return d
-    return date(y, m, 1)
-
-
-def render_calendar_cards(y: int, m: int, base_map: dict[str, str], change_map: dict[str, str], deliv_map: dict[str, str]) -> date:
+def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[str, str], deliv_map: dict[str, str]) -> date:
     cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
     month_days = list(cal.itermonthdates(y, m))
-    selected = get_selected_date_fallback(y, m)
+
+    if "selected_date" not in st.session_state:
+        st.session_state["selected_date"] = date(y, m, 1)
+
+    selected: date = st.session_state["selected_date"]
+    if selected.year != y or selected.month != m:
+        selected = date(y, m, 1)
+        st.session_state["selected_date"] = selected
 
     # 요일 헤더
-    head = st.columns(7)
+    header = st.columns(7)
     for i, wd in enumerate(WEEKDAYS_KO):
-        head[i].markdown(f"<div class='cal-wd'>{wd}</div>", unsafe_allow_html=True)
+        # 일요일은 이모티콘으로 강조(색 대신 안정적)
+        label = f"{wd}" if i != 6 else f"일 🔴"
+        header[i].markdown(f"<div style='text-align:center;font-weight:900;padding:6px 0;'>{label}</div>", unsafe_allow_html=True)
 
+    # 7일씩 주 단위
     rows = [month_days[i:i+7] for i in range(0, len(month_days), 7)]
     for week in rows:
         cols = st.columns(7)
@@ -273,43 +209,28 @@ def render_calendar_cards(y: int, m: int, base_map: dict[str, str], change_map: 
             chg = (change_map.get(ds, "") or "").strip()
             delivery = deliv_map.get(ds, "Y")
 
-            # 내용 구성: 배달불요 / 변경 / 기본
-            lines = []
+            # 시각 구분(색 이모티콘)
+            # 🟥 배달불요 / 🟨 변경 / ⬜ 기본
+            lines = [f"{d.day:02d}"]
             if in_month and delivery == "N":
-                lines.append("🚫 배달불요")
+                lines.append("🟥 🚫 배달불요")
             if in_month and chg:
-                lines.append(f"🔁 변경: {chg}")
+                lines.append(f"🟨 🔁 변경: {chg}")
             if in_month and base:
-                lines.append(f"🍱 기본: {base}")
+                lines.append(f"⬜ 🍱 기본: {base}")
 
-            content = "\n".join(lines)
+            # 선택 날짜는 앞에 ⭐ 표시
+            if in_month and d == selected:
+                lines[0] = f"⭐ {lines[0]}"
 
-            # 카드 클래스 결정
-            classes = ["cal-card"]
+            label = "\n".join(lines)
+
             if not in_month:
-                classes.append("out")
-            if d == selected:
-                classes.append("sel")
-            if in_month and delivery == "N":
-                classes.append("nd")
-            elif in_month and chg:
-                classes.append("ch")
-
-            cls = " ".join(classes)
-
-            # 클릭 링크 (query param)
-            if in_month:
-                href = f"?d={ds}"
+                cols[i].button(label, key=f"day_{ds}", disabled=True, use_container_width=True)
             else:
-                href = "#"
-
-            card_html = f"""
-            <a class="{cls}" href="{href}">
-              <div class="cal-day">{d.day:02d}</div>
-              <div class="cal-lines">{content}</div>
-            </a>
-            """
-            cols[i].markdown(card_html, unsafe_allow_html=True)
+                if cols[i].button(label, key=f"day_{ds}", use_container_width=True):
+                    st.session_state["selected_date"] = d
+                    selected = d
 
     return selected
 
@@ -335,7 +256,6 @@ def build_sms(y: int, m: int, base_map: dict[str, str], change_map: dict[str, st
 
         if delivery == "N":
             no_delivery.append(f"▶ {mmdd} : 배달불요")
-
         if chg:
             if base:
                 changes.append(f"▶ {mmdd} : {base} → {chg}")
@@ -425,8 +345,8 @@ menu_index = load_menu_index()
 left, right = st.columns([1.35, 1.0], vertical_alignment="top")
 
 with left:
-    st.markdown("### 📅 달력 (기본/변경/배달불요 표시)")
-    selected_date = render_calendar_cards(int(year), int(month), base_map, change_map, deliv_map)
+    st.markdown("### 📅 달력 (🟥배달불요 / 🟨변경 / ⬜기본)")
+    selected_date = render_calendar(int(year), int(month), base_map, change_map, deliv_map)
 
 with right:
     st.markdown("### 🧾 선택 날짜 편집")
@@ -523,4 +443,4 @@ with right:
     sms_text = build_sms(int(year), int(month), base_map, change_map, deliv_map)
     st.text_area("복사해서 문자로 보내세요", value=sms_text, height=320)
 
-st.caption("달력 표시: 🚫배달불요(빨강) / 🔁변경(노랑) / 🍱기본(회색) | 데이터: data/ 폴더")
+st.caption("달력 표시: 🟥배달불요 / 🟨변경 / ⬜기본 | 데이터: data/ 폴더")
