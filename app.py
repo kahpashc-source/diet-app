@@ -35,6 +35,7 @@ st.markdown(
     """
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&family=Nanum+Brush+Script&display=swap');
+      .wd-head{ text-align:center; font-weight:900; padding:6px 0; }
     </style>
     """,
     unsafe_allow_html=True
@@ -176,7 +177,9 @@ def save_gongyang_text(text: str) -> None:
 
 
 # -----------------------------
-# 달력(버튼 방식) - 새 창 열림 방지
+# 달력 (버튼 방식 / 새 창 열림 없음)
+# - 달력 칸: 상태 네모(🟥/🟨/⬜) 1개만 표시
+# - 내용: 이모티콘 없이 텍스트만
 # -----------------------------
 def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[str, str], deliv_map: dict[str, str]) -> date:
     cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
@@ -193,9 +196,9 @@ def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[s
     # 요일 헤더
     header = st.columns(7)
     for i, wd in enumerate(WEEKDAYS_KO):
-        # 일요일은 이모티콘으로 강조(색 대신 안정적)
-        label = f"{wd}" if i != 6 else f"일 🔴"
-        header[i].markdown(f"<div style='text-align:center;font-weight:900;padding:6px 0;'>{label}</div>", unsafe_allow_html=True)
+        # 일요일만 표시상 강조(텍스트 + 점)
+        label = f"{wd}" if i != 6 else "일 ●"
+        header[i].markdown(f"<div class='wd-head'>{label}</div>", unsafe_allow_html=True)
 
     # 7일씩 주 단위
     rows = [month_days[i:i+7] for i in range(0, len(month_days), 7)]
@@ -209,19 +212,29 @@ def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[s
             chg = (change_map.get(ds, "") or "").strip()
             delivery = deliv_map.get(ds, "Y")
 
-            # 시각 구분(색 이모티콘)
-            # 🟥 배달불요 / 🟨 변경 / ⬜ 기본
-            lines = [f"{d.day:02d}"]
+            # 상태 네모(1개만)
+            # 우선순위: 배달불요 > 변경 > 기본 > 없음
+            status_sq = ""
             if in_month and delivery == "N":
-                lines.append("🟥 🚫 배달불요")
-            if in_month and chg:
-                lines.append(f"🟨 🔁 변경: {chg}")
-            if in_month and base:
-                lines.append(f"⬜ 🍱 기본: {base}")
+                status_sq = "🟥"
+            elif in_month and chg:
+                status_sq = "🟨"
+            elif in_month and base:
+                status_sq = "⬜"
 
-            # 선택 날짜는 앞에 ⭐ 표시
+            head = f"{d.day:02d}"
             if in_month and d == selected:
-                lines[0] = f"⭐ {lines[0]}"
+                head = f"⭐ {head}"
+            if status_sq:
+                head = f"{head} {status_sq}"
+
+            lines = [head]
+            if in_month and delivery == "N":
+                lines.append("배달불요")
+            if in_month and chg:
+                lines.append(f"변경: {chg}")
+            if in_month and base:
+                lines.append(f"기본: {base}")
 
             label = "\n".join(lines)
 
@@ -307,7 +320,7 @@ font_family = (
     else "'Nanum Brush Script', 'Apple SD Gothic Neo', 'Malgun Gothic', serif"
 )
 
-# ✅ 상단: 좌(그릇 그림) / 우(글귀)
+# 상단: 좌(그릇) / 우(글귀)
 top_left, top_right = st.columns([1.0, 1.6], vertical_alignment="center")
 
 with top_left:
@@ -443,4 +456,4 @@ with right:
     sms_text = build_sms(int(year), int(month), base_map, change_map, deliv_map)
     st.text_area("복사해서 문자로 보내세요", value=sms_text, height=320)
 
-st.caption("달력 표시: 🟥배달불요 / 🟨변경 / ⬜기본 | 데이터: data/ 폴더")
+st.caption("달력 상태표시: 🟥배달불요 / 🟨변경 / ⬜기본 | 데이터: data/ 폴더")
