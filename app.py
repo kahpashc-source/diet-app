@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date
 import calendar
+import base64
 import html
-import io
 
 import pandas as pd
 import streamlit as st
@@ -26,6 +26,7 @@ BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
 CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
+BG_IMAGE_PATH = DATA_DIR / "poster_bg.jpg"          # 출력 배경(선택)
 
 WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -94,18 +95,31 @@ def _write_menu_index(items: list[str]) -> None:
 
 
 # -----------------------------
-# 달력 데이터 만들기
+# 배경 이미지 처리
+# -----------------------------
+def _save_bg_image(uploaded_file) -> None:
+    # 업로드 파일을 jpg로 저장(원본 확장자 무관하게 bytes 그대로 저장)
+    if uploaded_file is None:
+        return
+    BG_IMAGE_PATH.write_bytes(uploaded_file.getvalue())
+
+
+def _bg_data_uri() -> str | None:
+    if not BG_IMAGE_PATH.exists():
+        return None
+    b = BG_IMAGE_PATH.read_bytes()
+    # 단순하게 jpg로 가정(대부분 문제 없음). png여도 브라우저가 대체로 렌더링함.
+    return "data:image/jpeg;base64," + base64.b64encode(b).decode("utf-8")
+
+
+# -----------------------------
+# 달력 데이터
 # -----------------------------
 def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
-    """
-    반환: {일자(int): {"base":..., "change":..., "delivery": "Y/N"}}
-    (정확도: 매우 높음 — CSV 기반 단순 매핑)
-    """
     base = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
     change = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
     delivery = _read_csv(DELIVERY_PATH, ["date", "delivery"])
 
-    # 해당 월만 필터
     prefix = f"{y}-{m:02d}-"
     base = base[base["date"].str.startswith(prefix)].copy()
     change = change[change["date"].str.startswith(prefix)].copy()
@@ -140,94 +154,263 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
     return out
 
 
-def _build_calendar_html(y: int, m: int, org_name: str = "동약협회") -> str:
-    """
-    월간 달력 '1장 포스터' HTML 생성.
-    - 각 날짜 칸: 기본메뉴 / (있으면) 변경메뉴 / (배달불요면) 배달불요 라벨
-    - 출력 친화: A4 가로 인쇄 권장
-    (정확도: 매우 높음 — 렌더링은 브라우저 인쇄 기능 활용)
-    """
-    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작(0=월)
-    weeks = cal.monthdayscalendar(y, m)      # 각 주: [월..일], 해당월 아니면 0
-
+# -----------------------------
+# 맘스락 느낌 “포스터형(달력 1장)” HTML
+# -----------------------------
+def _build_moms_poster_html(
+    y: int,
+    m: int,
+    title_main: str,
+    title_sub: str,
+    bg_uri: str | None,
+    show_footer: bool,
+    footer_left: str,
+    footer_mid: str,
+    footer_right: str,
+) -> str:
+    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
+    weeks = cal.monthdayscalendar(y, m)
     data_map = _get_day_record_map(y, m)
 
-    title = f"{org_name}  |  {y}년 {m:02d}월 도시락 식단표"
-    subtitle = "※ 각 날짜 칸에 기본메뉴/변경메뉴/배달불요가 기재되어 출력(종이) 전달용으로 사용합니다."
+    # 배경
+    bg_css = ""
+    if bg_uri:
+        bg_css = f"""
+        body {{
+          background-image: url("{bg_uri}");
+          background-size: cover;
+          background-position: center center;
+          background-repeat: no-repeat;
+        }}
+        """
+    else:
+        # 기본 배경(이미지 없을 때)
+        bg_css = """
+        body {
+          background: radial-gradient(1200px 600px at 30% 10%, rgba(255,255,255,0.9), rgba(255,255,255,0.35)),
+                      linear-gradient(135deg, rgba(170,220,255,0.65), rgba(255,200,230,0.55));
+        }
+        """
 
-    css = """
+    # 셀 높이: 1페이지(가로 A4) 안정 맞춤
+    # 5주=조금 크게, 6주=조금 작게 자동
+    row_count = len(weeks)
+    cell_h = 102 if row_count == 5 else 92
+
+    css = f"""
     <style>
-      @page { size: A4 landscape; margin: 10mm; }
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo",
-                     "Noto Sans KR", Arial, sans-serif;
-        color: #111;
-      }
-      .wrap { width: 100%; }
-      .head {
-        display:flex; align-items:flex-end; justify-content:space-between;
-        margin-bottom: 10px;
-      }
-      .title { font-size: 22px; font-weight: 900; }
-      .meta { font-size: 11px; color:#666; text-align:right; }
-      .subtitle { font-size: 12px; color:#444; margin: 2px 0 10px 0; }
-      table { border-collapse: collapse; width: 100%; table-layout: fixed; }
-      th, td { border: 1px solid #999; }
-      th {
-        background: #f2f2f2;
-        font-size: 12px;
-        padding: 6px 4px;
-        text-align: center;
+      @page {{ size: A4 landscape; margin: 7mm; }}
+      html, body {{ height: 100%; }}
+      {bg_css}
+
+      body {{
+        font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", Arial, sans-serif;
+        color: #0f172a;
+      }}
+
+      .sheet {{
+        width: 100%;
+        border-radius: 18px;
+        padding: 10px 12px 10px 12px;
+        box-sizing: border-box;
+        background: rgba(255,255,255,0.18);
+        backdrop-filter: blur(2px);
+      }}
+
+      /* 헤더: 맘스락 느낌의 큰 타이틀 */
+      .header {{
+        display:flex;
+        align-items:flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }}
+
+      .brand {{
+        width: 140px;
+        min-width: 140px;
+        height: 88px;
+        border-radius: 16px;
+        background: rgba(255,255,255,0.75);
+        border: 1px solid rgba(15,23,42,0.12);
+        box-shadow: 0 6px 16px rgba(15,23,42,0.10);
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        font-weight: 900;
+        letter-spacing: -0.2px;
+        line-height: 1.05;
+        text-align:center;
+      }}
+      .brand small {{
+        display:block;
         font-weight: 800;
-      }
-      td {
-        height: 110px;
-        vertical-align: top;
-        padding: 6px 6px;
-      }
-      .cell-top {
-        display:flex; justify-content:space-between; align-items:center;
-        margin-bottom: 4px;
-      }
-      .daynum { font-size: 13px; font-weight: 900; }
-      .badge {
-        font-size: 11px; font-weight: 900;
-        padding: 2px 6px; border-radius: 10px;
-        border: 1px solid rgba(0,0,0,0.25);
-      }
-      .badge-nodelivery { background: #ffe8e8; }
-      .menu { font-size: 12px; line-height: 1.25; margin-top: 3px; }
-      .base { font-weight: 800; }
-      .change { margin-top: 4px; }
-      .change .label {
-        display:inline-block;
-        font-size: 11px; font-weight: 900;
-        padding: 1px 6px; border-radius: 8px;
-        background: #fff4cc;
-        border: 1px solid rgba(0,0,0,0.2);
-        margin-right: 6px;
-      }
-      .empty { background: #fafafa; }
-      .weekend-sat { background: #fbfbff; }
-      .weekend-sun { background: #fffafb; }
-      .foot {
-        margin-top: 8px;
         font-size: 11px;
-        color: #666;
+        opacity: 0.75;
+        margin-top: 4px;
+      }}
+
+      .titles {{
+        flex: 1;
+        display:flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content:center;
+        padding-top: 2px;
+      }}
+      .titles .main {{
+        font-size: 44px;
+        font-weight: 1000;
+        letter-spacing: -1.2px;
+        color: rgba(15,23,42,0.92);
+        text-shadow: 0 2px 0 rgba(255,255,255,0.65), 0 6px 18px rgba(15,23,42,0.15);
+        margin: 0;
+      }}
+      .titles .sub {{
+        font-size: 40px;
+        font-weight: 1000;
+        letter-spacing: -1.2px;
+        color: rgba(15,23,42,0.92);
+        text-shadow: 0 2px 0 rgba(255,255,255,0.65), 0 6px 18px rgba(15,23,42,0.15);
+        margin: 2px 0 0 0;
+      }}
+
+      .qr {{
+        width: 110px;
+        min-width: 110px;
+        height: 110px;
+        border-radius: 16px;
+        background: rgba(255,255,255,0.75);
+        border: 1px solid rgba(15,23,42,0.12);
+        box-shadow: 0 6px 16px rgba(15,23,42,0.10);
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        color: rgba(15,23,42,0.55);
+        font-weight: 900;
+        font-size: 12px;
+        text-align:center;
+        line-height: 1.1;
+      }}
+
+      /* 달력 */
+      table {{
+        border-collapse: separate;
+        border-spacing: 10px 10px;   /* 맘스락처럼 ‘카드가 떠 있는’ 느낌 */
+        width: 100%;
+        table-layout: fixed;
+      }}
+      th {{
+        font-size: 14px;
+        font-weight: 1000;
+        text-align:center;
+        color: rgba(15,23,42,0.90);
+        text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+        padding: 2px 0 0 0;
+      }}
+
+      td {{
+        height: {cell_h}px;
+        vertical-align: top;
+        background: rgba(255,255,255,0.82);
+        border: 1px solid rgba(15,23,42,0.18);
+        border-radius: 14px;
+        box-shadow: 0 10px 18px rgba(15,23,42,0.12);
+        padding: 8px 10px;
+        box-sizing: border-box;
+        overflow: hidden;
+      }}
+
+      .empty {{
+        background: rgba(255,255,255,0.35);
+        border: 1px dashed rgba(15,23,42,0.12);
+        box-shadow: none;
+      }}
+
+      .cell-top {{
         display:flex;
         justify-content: space-between;
-      }
-      .print-tip {
-        font-size: 11px; color:#555;
-      }
+        align-items: center;
+        margin-bottom: 6px;
+      }}
+      .datechip {{
+        display:inline-flex;
+        align-items:center;
+        gap: 6px;
+        font-weight: 1000;
+        font-size: 14px;
+        letter-spacing: -0.2px;
+      }}
+      .dow {{
+        font-size: 12px;
+        font-weight: 900;
+        opacity: 0.70;
+      }}
+
+      .badge-nodelivery {{
+        font-size: 12px;
+        font-weight: 1000;
+        color: #b00020;
+        background: rgba(255, 235, 238, 0.95);
+        border: 1px solid rgba(176,0,32,0.25);
+        padding: 3px 9px;
+        border-radius: 999px;
+        letter-spacing: -0.2px;
+      }}
+
+      .menu {{
+        font-size: 14px;
+        line-height: 1.18;
+        letter-spacing: -0.25px;
+        word-break: keep-all;
+      }}
+      .base {{
+        font-weight: 1000;
+        color: rgba(15,23,42,0.92);
+      }}
+
+      /* 변경메뉴: 붉은색 + 굵게 */
+      .change {{
+        margin-top: 7px;
+        font-weight: 1000;
+        color: #c40000;
+      }}
+      .change .label {{
+        display:inline-block;
+        font-size: 12px;
+        font-weight: 1000;
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: rgba(196,0,0,0.09);
+        border: 1px solid rgba(196,0,0,0.25);
+        margin-right: 8px;
+      }}
+
+      /* 하단 정보박스(선택) */
+      .footer {{
+        margin-top: 10px;
+        display:grid;
+        grid-template-columns: 1.1fr 1.4fr 1.1fr;
+        gap: 10px;
+      }}
+      .fbox {{
+        background: rgba(255,255,255,0.75);
+        border: 1px solid rgba(15,23,42,0.14);
+        border-radius: 16px;
+        box-shadow: 0 8px 16px rgba(15,23,42,0.10);
+        padding: 10px 12px;
+        min-height: 68px;
+        font-size: 12px;
+        line-height: 1.25;
+        color: rgba(15,23,42,0.80);
+        white-space: pre-wrap;
+      }}
     </style>
     """
 
-    # 요일 헤더 (월~일)
     thead = "<tr>" + "".join([f"<th>{w}</th>" for w in WEEKDAY_KR]) + "</tr>"
 
-    # 각 셀 생성
-    rows_html = []
+    rows = []
     for wk in weeks:
         tds = []
         for i, day in enumerate(wk):  # i: 0..6 (월..일)
@@ -241,43 +424,42 @@ def _build_calendar_html(y: int, m: int, org_name: str = "동약협회") -> str:
             delivery = (rec.get("delivery", "Y") or "Y").strip().upper()
             is_nodelivery = (delivery == "N")
 
-            # 주말 배경 약하게
-            weekend_class = ""
-            if i == 5:
-                weekend_class = "weekend-sat"
-            elif i == 6:
-                weekend_class = "weekend-sun"
-
-            badge = ""
-            if is_nodelivery:
-                badge = '<span class="badge badge-nodelivery">배달불요</span>'
+            dow = WEEKDAY_KR[i]
+            badge = f'<span class="badge-nodelivery">배달불요</span>' if is_nodelivery else ""
 
             base_line = f'<div class="menu base">{base}</div>' if base else '<div class="menu base">&nbsp;</div>'
 
             change_block = ""
             if change:
                 change_block = f"""
-                <div class="menu change">
-                  <span class="label">변경</span>{change}
-                </div>
+                <div class="menu change"><span class="label">변경메뉴</span>{change}</div>
                 """
 
-            cell_html = f"""
-            <td class="{weekend_class}">
+            cell = f"""
+            <td>
               <div class="cell-top">
-                <span class="daynum">{day}</span>
+                <div class="datechip">{day:02d}<span class="dow">({dow})</span></div>
                 {badge}
               </div>
               {base_line}
               {change_block}
             </td>
             """
-            tds.append(cell_html)
+            tds.append(cell)
 
-        rows_html.append("<tr>" + "".join(tds) + "</tr>")
+        rows.append("<tr>" + "".join(tds) + "</tr>")
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    html_doc = f"""
+    footer_html = ""
+    if show_footer:
+        footer_html = f"""
+        <div class="footer">
+          <div class="fbox">{html.escape(footer_left)}</div>
+          <div class="fbox">{html.escape(footer_mid)}</div>
+          <div class="fbox">{html.escape(footer_right)}</div>
+        </div>
+        """
+
+    return f"""
     <!doctype html>
     <html lang="ko">
       <head>
@@ -285,45 +467,62 @@ def _build_calendar_html(y: int, m: int, org_name: str = "동약협회") -> str:
         {css}
       </head>
       <body>
-        <div class="wrap">
-          <div class="head">
-            <div>
-              <div class="title">{title}</div>
-              <div class="subtitle">{subtitle}</div>
+        <div class="sheet">
+          <div class="header">
+            <div class="brand">
+              MOMS<br/>STYLE
+              <small>포스터 출력용</small>
             </div>
-            <div class="meta">
-              생성: {now}<br/>
-              <span class="print-tip">권장: Ctrl+P → 가로/여백 좁게/한 페이지 맞춤</span>
+
+            <div class="titles">
+              <h1 class="main">{html.escape(title_main)}</h1>
+              <h2 class="sub">{html.escape(title_sub)}</h2>
             </div>
+
+            <div class="qr">QR<br/>영역(선택)</div>
           </div>
 
           <table>
             <thead>{thead}</thead>
             <tbody>
-              {''.join(rows_html)}
+              {''.join(rows)}
             </tbody>
           </table>
 
-          <div class="foot">
-            <div>표기: <b>변경</b>은 변경메뉴가 있는 날만 표시 / <b>배달불요</b>는 배달 N인 날만 표시</div>
-            <div></div>
-          </div>
+          {footer_html}
         </div>
       </body>
     </html>
     """
-    return html_doc
 
 
 # -----------------------------
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("월별 달력(출력용 1장) 안에 기본메뉴/변경메뉴/배달불요가 모두 기재되도록 구성합니다.")
+st.caption("맘스락 포스터 느낌(달력 카드형)으로 출력용 1장 HTML을 생성합니다. 변경메뉴는 붉은색 굵게 표시됩니다.")
 
 colL, colR = st.columns([1.05, 1.0], vertical_alignment="top")
 
 with colL:
+    st.subheader("0) 포스터 배경(선택)")
+    up = st.file_uploader("맘스락 포스터처럼 배경 사진을 넣고 싶으면 업로드", type=["jpg", "jpeg", "png", "webp"])
+    c0a, c0b = st.columns([1, 1])
+    with c0a:
+        if st.button("🖼️ 배경 저장", use_container_width=True):
+            if up is None:
+                st.warning("업로드한 파일이 없습니다.")
+            else:
+                _save_bg_image(up)
+                st.success("배경 저장 완료")
+    with c0b:
+        if st.button("🧹 배경 삭제", use_container_width=True):
+            if BG_IMAGE_PATH.exists():
+                BG_IMAGE_PATH.unlink()
+            st.success("배경 삭제 완료")
+
+    st.divider()
+
     st.subheader("1) 메뉴 인덱스 관리")
     idx_items = _read_menu_index()
 
@@ -355,14 +554,12 @@ with colL:
     y = st.selectbox("연도", list(range(today.year - 2, today.year + 4)), index=2)
     m = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
 
-    # 날짜 선택
     days = [date(y, m, d) for d in range(1, calendar.monthrange(y, m)[1] + 1)]
     labels = [f"{d.strftime('%m/%d')}({WEEKDAY_KR[d.weekday()]})" for d in days]
     pick = st.selectbox("날짜 선택", list(range(len(days))), format_func=lambda i: labels[i])
     dsel = days[pick]
     key = dsel.isoformat()
 
-    # 현재 값 로드
     base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
     change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
     deliv_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
@@ -375,8 +572,7 @@ with colL:
 
     st.markdown(f"**선택 날짜:** {key}  ({WEEKDAY_KR[dsel.weekday()]})")
 
-    # 기본 메뉴
-    st.markdown("**기본메뉴 입력(인덱스에서 선택/직접 입력 가능)**")
+    st.markdown("**기본메뉴**")
     base_pick = st.selectbox("기본메뉴(인덱스)", ["(직접입력)"] + idx_items, index=0)
     base_text = st.text_input("기본메뉴(직접입력)", value=cur_base if base_pick == "(직접입력)" else base_pick)
     if base_pick != "(직접입력)":
@@ -392,26 +588,23 @@ with colL:
             _delete_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel)
             st.success("기본메뉴 삭제 완료")
 
-    # 변경 메뉴
-    st.markdown("**변경메뉴 입력(없으면 비워둬도 됨)**")
+    st.markdown("**변경메뉴(있으면 입력)**")
     change_pick = st.selectbox("변경메뉴(인덱스)", ["(없음)"] + idx_items, index=0)
     default_change = "" if cur_change.strip() == "" else cur_change
     change_text = st.text_input("변경메뉴(직접입력)", value=default_change if change_pick == "(없음)" else change_pick)
     if change_pick != "(없음)":
         change_text = change_pick
 
-    c1, c2 = st.columns([1, 1])
-    with c1:
+    c3, c4 = st.columns([1, 1])
+    with c3:
         if st.button("💾 변경메뉴 저장", use_container_width=True):
-            v = (change_text or "").strip()
-            _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", v)
+            _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", (change_text or "").strip())
             st.success("변경메뉴 저장 완료")
-    with c2:
+    with c4:
         if st.button("🧹 변경메뉴 삭제(해당일)", use_container_width=True):
             _delete_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel)
             st.success("변경메뉴 삭제 완료")
 
-    # 배달 여부
     st.markdown("**배달 여부**")
     deliv_choice = st.radio("배달", ["배달(Y)", "배달불요(N)"], index=0 if cur_deliv == "Y" else 1, horizontal=True)
     if st.button("💾 배달여부 저장", use_container_width=True):
@@ -419,31 +612,41 @@ with colL:
         st.success("배달여부 저장 완료")
 
 with colR:
-    st.subheader("3) 월간 달력(출력용 1장) 미리보기")
-    org = st.text_input("상단 제목에 넣을 단체명", value="동약협회")
-    poster_html = _build_calendar_html(y, m, org_name=(org or "동약협회").strip())
+    st.subheader("3) 포스터(출력용 1장) 미리보기")
 
-    # 미리보기(높이는 넉넉히)
-    components.html(poster_html, height=760, scrolling=True)
+    org = st.text_input("상단 표기(단체/회사명)", value="동약협회")
+    title_main = st.text_input("큰 제목(1줄)", value="맘스락")
+    title_sub = st.text_input("큰 제목(2줄)", value=f"{m}월식단  {org}")
+
+    st.markdown("**하단 안내 박스(선택)**")
+    show_footer = st.checkbox("하단 박스 표시", value=False)
+    footer_left = st.text_area("하단 왼쪽", value="원산지/비고 등", height=80)
+    footer_mid = st.text_area("하단 가운데", value="회사명/담당자/연락처/식사시간 등", height=80)
+    footer_right = st.text_area("하단 오른쪽", value="이용방법/유의사항 등", height=80)
+
+    bg_uri = _bg_data_uri()
+    poster_html = _build_moms_poster_html(
+        y=y,
+        m=m,
+        title_main=(title_main or "맘스락").strip(),
+        title_sub=(title_sub or f"{m}월식단").strip(),
+        bg_uri=bg_uri,
+        show_footer=show_footer,
+        footer_left=footer_left or "",
+        footer_mid=footer_mid or "",
+        footer_right=footer_right or "",
+    )
+
+    components.html(poster_html, height=780, scrolling=True)
 
     st.divider()
-    st.subheader("4) 업체/식당 전달용 파일 만들기")
-
+    st.subheader("4) 업체 전달용 파일 만들기")
     st.download_button(
-        label="⬇️ HTML 다운로드(권장: 열고 Ctrl+P → PDF로 저장/바로 인쇄)",
+        label="⬇️ HTML 다운로드(열고 Ctrl+P → PDF 저장/바로 출력)",
         data=poster_html.encode("utf-8"),
-        file_name=f"{y}-{m:02d}_식단표_달력1장.html",
+        file_name=f"{y}-{m:02d}_식단표_포스터형.html",
         mime="text/html",
         use_container_width=True,
     )
 
-    st.info(
-        "사용 방법(정확도: 매우 높음)\n"
-        "1) 위 HTML 다운로드\n"
-        "2) 파일을 더블클릭으로 열기(크롬/엣지)\n"
-        "3) Ctrl+P(인쇄)\n"
-        "   - 방향: 가로\n"
-        "   - 여백: 좁게\n"
-        "   - 배율: 한 페이지에 맞춤\n"
-        "4) 프린터로 출력하거나 ‘PDF로 저장’ 후 업체에 전송"
-    )
+    st.info("인쇄 권장: 가로 / 여백 좁게 / 한 페이지에 맞춤 (이 설정이면 ‘달력 1장’으로 안정적으로 출력됩니다.)")
