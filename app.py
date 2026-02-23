@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date
 import calendar
 import pandas as pd
 import streamlit as st
@@ -14,8 +14,11 @@ import streamlit as st
 # -----------------------------
 st.set_page_config(page_title="맘스락 식단 변경 프로그램", layout="wide")
 
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
+# ✅ 중요: 저장 폴더를 "실행 위치"가 아니라 "app.py 위치"로 고정
+# - 절전/재부팅 후 실행 위치가 달라도 data가 사라지는(새로 생성되는) 현상 방지
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
 CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
@@ -24,7 +27,7 @@ MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 GONGYANG_PATH = DATA_DIR / "gongyang.txt"           # text file
 
 # ✅ 그릇 이미지 파일명 (프로젝트 폴더(app.py)와 같은 위치)
-BOWL_IMAGE_PATH = Path("gongyang_bowl.png")
+BOWL_IMAGE_PATH = APP_DIR / "gongyang_bowl.png"
 
 WEEKDAYS_KO = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -150,7 +153,7 @@ def load_menu_index() -> list[str]:
 
 
 def save_menu_index(names: list[str]) -> None:
-    cleaned = []
+    cleaned: list[str] = []
     for n in names:
         n2 = (n or "").strip()
         if n2 and n2 not in cleaned:
@@ -196,12 +199,11 @@ def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[s
     # 요일 헤더
     header = st.columns(7)
     for i, wd in enumerate(WEEKDAYS_KO):
-        # 일요일만 표시상 강조(텍스트 + 점)
         label = f"{wd}" if i != 6 else "일 ●"
         header[i].markdown(f"<div class='wd-head'>{label}</div>", unsafe_allow_html=True)
 
     # 7일씩 주 단위
-    rows = [month_days[i:i+7] for i in range(0, len(month_days), 7)]
+    rows = [month_days[i:i + 7] for i in range(0, len(month_days), 7)]
     for week in rows:
         cols = st.columns(7)
         for i, d in enumerate(week):
@@ -213,7 +215,6 @@ def render_calendar(y: int, m: int, base_map: dict[str, str], change_map: dict[s
             delivery = deliv_map.get(ds, "Y")
 
             # 상태 네모(1개만)
-            # 우선순위: 배달불요 > 변경 > 기본 > 없음
             status_sq = ""
             if in_month and delivery == "N":
                 status_sq = "🟥"
@@ -300,6 +301,10 @@ with st.sidebar:
     st.subheader("설정")
     year = st.number_input("연도", min_value=2024, max_value=2100, value=today.year, step=1)
     month = st.number_input("월", min_value=1, max_value=12, value=today.month, step=1)
+
+    st.divider()
+    st.subheader("💾 PC 저장 위치")
+    st.caption(str(DATA_DIR))  # ✅ 어디에 저장되는지 항상 표시
 
     st.divider()
     st.subheader("🖋️ 글귀(공양게) 설정")
