@@ -28,14 +28,14 @@ CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
-# ✅ (자동) 맘스락 포스터 사진에서 좌측 M 로고 추출(있으면)
+# (선택) 맘스락 포스터 사진에서 좌측 M 로고 자동 추출(있으면)
 POSTER_SOURCE_PATH = DATA_DIR / "moms_poster_source.jpg"
 EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
 
-# ✅ (수동) 협회 로고 파일: data/association_logo.png 로 넣어두면 자동 표시
+# ✅ 협회 로고(업로드 UI 없음) : GitHub에 올려둔 파일
 ASSOC_LOGO_PATH = DATA_DIR / "association_logo.png"
 
-WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]  # 평일만
+WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]
 WEEKDAY_FULL = ["월", "화", "수", "목", "금", "토", "일"]
 
 
@@ -139,7 +139,7 @@ def _data_uri(path: Path) -> str | None:
 
 
 # -----------------------------
-# ✅ 포스터 사진에서 M 로고 자동 추출(있으면)
+# (선택) 포스터 사진에서 M 로고 자동 추출
 # -----------------------------
 def _ensure_extracted_logo() -> None:
     if EXTRACTED_LOGO_PATH.exists():
@@ -228,7 +228,53 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 
 
 # -----------------------------
-# 평일(월~금) 포스터 HTML (1페이지 고정)
+# ✅ 날짜 선택 UI: 월~금 달력 버튼
+# -----------------------------
+def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
+    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
+    weeks7 = cal.monthdayscalendar(y, m)
+
+    rows5: list[list[int]] = []
+    for wk in weeks7:
+        wd = wk[:5]  # 월~금
+        if all(d == 0 for d in wd):
+            continue
+        rows5.append(wd)
+
+    st.markdown("**📅 날짜 선택(평일만)**")
+    st.caption("월~금 버튼을 클릭하면 해당 날짜로 바로 입력합니다.")
+
+    # 선택 강조용
+    sel_day = selected.day if (selected.year == y and selected.month == m) else None
+
+    # 헤더
+    hcols = st.columns(5)
+    for i, w in enumerate(WEEKDAY_KR_WD):
+        hcols[i].markdown(f"<div style='text-align:center;font-weight:900'>{w}</div>", unsafe_allow_html=True)
+
+    for r, wk in enumerate(rows5):
+        cols = st.columns(5)
+        for c, day in enumerate(wk):
+            if day == 0:
+                cols[c].button(" ", key=f"blank_{y}_{m}_{r}_{c}", disabled=True, use_container_width=True)
+                continue
+
+            dt = date(y, m, day)
+            label = f"{day:02d}"
+            is_sel = (sel_day == day)
+
+            # 선택된 버튼은 표시를 조금 다르게
+            if is_sel:
+                label = f"✅ {label}"
+
+            if cols[c].button(label, key=f"d_{y}_{m}_{day}", use_container_width=True):
+                st.session_state["selected_date"] = dt
+
+    return st.session_state.get("selected_date", selected)
+
+
+# -----------------------------
+# 포스터 HTML (평일 / 1페이지 고정 / 색상 분리 / 로고 적용)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -251,15 +297,15 @@ def _build_weekday_poster_html(
         rows5.append(wd)
 
     row_count = len(rows5)
-    cell_h = 122 if row_count <= 4 else 104  # 5행이면 더 타이트
+    cell_h = 122 if row_count <= 4 else 104  # 5행이면 더 타이트(1페이지 보장)
 
-    # 좌측 MOMS 로고(없으면 대체)
+    # 좌측 MOMS 로고 (없으면 M 대체)
     if moms_logo_uri:
         moms_logo_html = f'<img src="{moms_logo_uri}" class="moms-logo-img" alt="MOMS logo"/>'
     else:
         moms_logo_html = '<div class="moms-logo-fallback">M</div>'
 
-    # 우측 협회 로고(없으면 텍스트만)
+    # 우측 협회 로고 (없으면 텍스트만)
     assoc_html = ""
     if assoc_logo_uri:
         assoc_html = f'<img src="{assoc_logo_uri}" class="assoc-logo-img" alt="협회 로고"/>'
@@ -277,7 +323,7 @@ def _build_weekday_poster_html(
       /* PDF 1페이지 고정 */
       .sheet {{ height: 100%; overflow: hidden; }}
 
-      /* 인쇄 색 유지 */
+      /* 인쇄 색 유지 + 페이지 쪼개짐 방지 */
       @media print {{
         * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
         table, tr, td, th {{ page-break-inside: avoid !important; break-inside: avoid !important; }}
@@ -326,20 +372,9 @@ def _build_weekday_poster_html(
       .title .t2 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 6px 0 0 0; }}
 
       /* 우측: 협회 로고 + 동약협회 */
-      .rightbox {{
-        justify-content: center;
-        gap: 12px;
-      }}
-      .assoc-logo-img {{
-        height: 62px;
-        width: 62px;
-        object-fit: contain;
-      }}
-      .rightbox .label {{
-        font-size: 30px;
-        font-weight: 1000;
-        letter-spacing: -0.3px;
-      }}
+      .rightbox {{ justify-content: center; gap: 12px; }}
+      .assoc-logo-img {{ height: 62px; width: 62px; object-fit: contain; }}
+      .rightbox .label {{ font-size: 30px; font-weight: 1000; letter-spacing: -0.3px; }}
 
       /* 달력 */
       table {{
@@ -371,18 +406,15 @@ def _build_weekday_poster_html(
         box-shadow: none;
       }}
 
-      /* ✅ 3) 색상 서로 다르게 */
-      /* 변경메뉴 있음: 옅은 노랑 계열 */
+      /* ✅ 변경/배달불요 칸 색상 분리 */
       .has-change {{
         border-color: rgba(184, 134, 11, 0.55);
         background: rgba(255, 250, 235, 0.96);
       }}
-      /* 배달불요: 옅은 분홍/붉은 계열 */
       .no-delivery {{
         border-color: rgba(176,0,32,0.46);
         background: rgba(255, 240, 244, 0.96);
       }}
-      /* 둘 다: 옅은 보라 계열 */
       .both {{
         border-color: rgba(125, 60, 152, 0.56);
         background: rgba(248, 244, 255, 0.96);
@@ -526,7 +558,7 @@ def _build_weekday_poster_html(
 
 
 # -----------------------------
-# 앱 시작 시 로고 자동 추출 시도
+# 시작 시 M 로고 추출(있으면)
 # -----------------------------
 _ensure_extracted_logo()
 
@@ -535,9 +567,9 @@ _ensure_extracted_logo()
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("좌측 MOMS에서 Style 삭제 / 우측 동약협회에 협회 로고 삽입 / 변경·배달불요 칸 색상 분리 / PDF 1페이지 고정")
+st.caption("날짜 선택을 ‘월~금 달력 버튼’으로 개선했습니다. (협회 로고는 data/association_logo.png 자동 사용)")
 
-colL, colR = st.columns([1.05, 1.0], vertical_alignment="top")
+colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
 with colL:
     st.subheader("1) 메뉴 인덱스 관리")
@@ -565,17 +597,28 @@ with colL:
                 st.success("삭제 완료")
 
     st.divider()
-    st.subheader("2) 월 선택 & 날짜별 입력")
+    st.subheader("2) 월 선택")
 
     today = date.today()
     y = st.selectbox("연도", list(range(today.year - 2, today.year + 4)), index=2)
     m = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
 
-    days = [date(y, m, d) for d in range(1, calendar.monthrange(y, m)[1] + 1)]
-    labels = [f"{d.strftime('%m/%d')}({WEEKDAY_FULL[d.weekday()]})" for d in days]
-    pick = st.selectbox("날짜 선택", list(range(len(days))), format_func=lambda i: labels[i])
-    dsel = days[pick]
+    # 선택 날짜 초기값(세션)
+    if "selected_date" not in st.session_state:
+        st.session_state["selected_date"] = date(y, m, 1)
+
+    # 월 변경 시 selected_date를 그 달 1일로 보정
+    sd: date = st.session_state["selected_date"]
+    if sd.year != y or sd.month != m:
+        st.session_state["selected_date"] = date(y, m, 1)
+
+    # ✅ 달력 버튼으로 날짜 선택
+    selected = _weekday_calendar_picker(y, m, st.session_state["selected_date"])
+    dsel = selected
     key = dsel.isoformat()
+
+    st.divider()
+    st.subheader("3) 선택 날짜 입력")
 
     base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
     change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
@@ -628,15 +671,15 @@ with colL:
         st.success("배달여부 저장 완료")
 
 with colR:
-    st.subheader("3) 포스터(출력용 1장) 미리보기")
+    st.subheader("4) 포스터(출력용 1장) 미리보기")
 
     right_label = st.text_input("우측 상단 표기", value="동약협회")
 
     title_top = f"맘스락 {m:02d}월"
     title_bottom = "식단 변경"
 
-    moms_logo_uri = _data_uri(EXTRACTED_LOGO_PATH)  # 자동 추출된 M 로고
-    assoc_logo_uri = _data_uri(ASSOC_LOGO_PATH)     # data/association_logo.png
+    moms_logo_uri = _data_uri(EXTRACTED_LOGO_PATH)
+    assoc_logo_uri = _data_uri(ASSOC_LOGO_PATH)
 
     poster_html = _build_weekday_poster_html(
         y=y,
@@ -651,7 +694,7 @@ with colR:
     components.html(poster_html, height=780, scrolling=True)
 
     st.divider()
-    st.subheader("4) 업체 전달용 파일 만들기")
+    st.subheader("5) 업체 전달용 파일 만들기")
 
     dl_name = _safe_filename(f"{title_top}_{title_bottom}_{right_label}") + ".html"
     st.download_button(
@@ -661,5 +704,4 @@ with colR:
         mime="text/html",
         use_container_width=True,
     )
-
-    st.info("PDF 저장: HTML 열기 → Ctrl+P → PDF로 저장(가로/여백 최소). 1페이지를 넘지 않도록 고정되어 있습니다.")
+    st.info("PDF 저장: HTML 열기 → Ctrl+P → PDF로 저장(가로/여백 최소). 1페이지 고정(넘치면 칸 안에서 잘립니다).")
