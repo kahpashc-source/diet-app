@@ -38,6 +38,21 @@ WEEKDAY_FULL = ["월", "화", "수", "목", "금", "토", "일"]
 
 
 # -----------------------------
+# 안전 문자열 처리(핵심 버그 수정)
+# -----------------------------
+def _safe_str(x) -> str:
+    """NaN/None/숫자 등 어떤 값이 와도 안전하게 문자열로 정리."""
+    if x is None:
+        return ""
+    try:
+        if pd.isna(x):
+            return ""
+    except Exception:
+        pass
+    return str(x).strip()
+
+
+# -----------------------------
 # CSV 유틸
 # -----------------------------
 def _ensure_csv(path: Path, columns: list[str]) -> None:
@@ -47,11 +62,13 @@ def _ensure_csv(path: Path, columns: list[str]) -> None:
 
 def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     _ensure_csv(path, columns)
+    # dtype=str이어도 NaN이 생길 수 있어 후처리로 안전화합니다.
     df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
     for c in columns:
         if c not in df.columns:
             df[c] = ""
     df = df[columns].copy()
+
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date.astype(str)
         df = df[df["date"].ne("NaT")]
@@ -86,7 +103,8 @@ def _read_menu_index() -> list[str]:
     df = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8-sig")
     if "name" not in df.columns:
         return []
-    items = [x.strip() for x in df["name"].fillna("").tolist() if str(x).strip()]
+    items = [_safe_str(x) for x in df["name"].fillna("").tolist()]
+    items = [x for x in items if x]
     seen = set()
     out = []
     for x in items:
@@ -113,21 +131,18 @@ def _data_uri(path: Path) -> str | None:
 
 
 # -----------------------------
-# ✅ 포스터 사진에서 M 로고 자동 추출
+# ✅ 포스터 사진에서 M 로고 자동 추출(있으면)
 # -----------------------------
 def _ensure_extracted_logo() -> None:
     if EXTRACTED_LOGO_PATH.exists():
         return
     if not POSTER_SOURCE_PATH.exists():
         return
-
     try:
         from PIL import Image, ImageOps
 
         img = Image.open(POSTER_SOURCE_PATH).convert("RGB")
         w, h = img.size
-
-        # 좌측 상단 넓게 잡고(0~32%, 0~32%) 로고 bbox 자동 추정
         crop = img.crop((0, 0, int(w * 0.32), int(h * 0.32)))
         crop = ImageOps.autocontrast(crop)
 
@@ -148,13 +163,12 @@ def _ensure_extracted_logo() -> None:
 
         logo = logo.resize((420, int(420 * logo.size[1] / max(1, logo.size[0]))))
         logo.save(EXTRACTED_LOGO_PATH, format="PNG", optimize=True)
-
     except Exception:
         return
 
 
 # -----------------------------
-# 달력 데이터
+# 달력 데이터(버그 수정 핵심)
 # -----------------------------
 def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
     base = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
@@ -167,29 +181,39 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
     delivery = delivery[delivery["date"].str.startswith(prefix)].copy()
 
     out: dict[int, dict[str, str]] = {}
+
     for _, r in base.iterrows():
+        ds = _safe_str(r.get("date"))
+        if len(ds) < 2:
+            continue
         try:
-            d = int(str(r["date"])[-2:])
+            d = int(ds[-2:])
         except Exception:
             continue
         out.setdefault(d, {})
-        out[d]["base"] = (r.get("base_menu") or "").strip()
+        out[d]["base"] = _safe_str(r.get("base_menu"))
 
     for _, r in change.iterrows():
+        ds = _safe_str(r.get("date"))
+        if len(ds) < 2:
+            continue
         try:
-            d = int(str(r["date"])[-2:])
+            d = int(ds[-2:])
         except Exception:
             continue
         out.setdefault(d, {})
-        out[d]["change"] = (r.get("change_menu") or "").strip()
+        out[d]["change"] = _safe_str(r.get("change_menu"))
 
     for _, r in delivery.iterrows():
+        ds = _safe_str(r.get("date"))
+        if len(ds) < 2:
+            continue
         try:
-            d = int(str(r["date"])[-2:])
+            d = int(ds[-2:])
         except Exception:
             continue
         out.setdefault(d, {})
-        v = (r.get("delivery") or "Y").strip().upper()
+        v = _safe_str(r.get("delivery")).upper()
         out[d]["delivery"] = "N" if v == "N" else "Y"
 
     return out
@@ -209,27 +233,21 @@ def _build_weekday_poster_html(
     data_map = _get_day_record_map(y, m)
 
     cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
-    weeks7 = cal.monthdayscalendar(y, m)     # 각 주: [월..일], 해당월 아니면 0
-
-    # ✅ 주차 구조 그대로 두고 월~금만 사용
+    weeks7 = cal.monthdayscalendar(y, m)     # [월..일]
     rows5: list[list[int]] = []
     for wk in weeks7:
         wd = wk[:5]  # 월~금
-        # 주 전체가 0(즉, 월~금이 전부 비어있으면) 스킵
         if all(d == 0 for d in wd):
             continue
         rows5.append(wd)
 
-    # 1장 출력 안정: 행 수에 따라 셀 높이 자동 조정
     row_count = len(rows5)
-    cell_h = 126 if row_count <= 4 else 112
+    cell_h = 126 if row_count <= 4 else 112  # 1장 출력 안정
 
     if logo_uri:
         logo_html = f'<img src="{logo_uri}" class="logo-img" alt="logo"/>'
     else:
-        logo_html = """
-        <div class="logo-fallback"><div class="mf">M</div></div>
-        """
+        logo_html = '<div class="logo-fallback"><div class="mf">M</div></div>'
 
     css = f"""
     <style>
@@ -240,17 +258,10 @@ def _build_weekday_poster_html(
         color: #0f172a;
         background: #ffffff;
       }}
-
       @media print {{
         * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
       }}
-
-      .sheet {{
-        width: 100%;
-        border-radius: 18px;
-        padding: 10px 12px 10px 12px;
-        box-sizing: border-box;
-      }}
+      .sheet {{ width: 100%; padding: 10px 12px; box-sizing: border-box; }}
 
       .header {{
         display:grid;
@@ -260,24 +271,21 @@ def _build_weekday_poster_html(
         margin-bottom: 10px;
       }}
 
-      .brand {{
+      .box {{
         height: 104px;
         border-radius: 18px;
         background: #ffffff;
-        border: 2.5px solid rgba(15,23,42,0.32);
+        border: 2.6px solid rgba(15,23,42,0.34);
         box-shadow: 0 6px 14px rgba(15,23,42,0.08);
         display:flex;
         align-items:center;
         justify-content:center;
-        gap: 10px;
         padding: 10px 12px;
         box-sizing: border-box;
       }}
-      .logo-img {{
-        height: 74px;
-        width: auto;
-        object-fit: contain;
-      }}
+
+      .brand {{ justify-content: center; gap: 10px; }}
+      .logo-img {{ height: 74px; width: auto; object-fit: contain; }}
       .logo-fallback {{
         height: 74px; width: 74px;
         border-radius: 20px;
@@ -285,62 +293,17 @@ def _build_weekday_poster_html(
         border: 2px solid rgba(15,23,42,0.22);
         display:flex; align-items:center; justify-content:center;
       }}
-      .logo-fallback .mf {{
-        font-size: 54px;
-        font-weight: 1000;
-        color: rgba(15,23,42,0.86);
-        line-height: 1;
-      }}
+      .logo-fallback .mf {{ font-size: 54px; font-weight: 1000; color: rgba(15,23,42,0.86); line-height: 1; }}
 
-      .brand-text {{
-        line-height: 1.0;
-        font-weight: 1000;
-        letter-spacing: -0.3px;
-        color: rgba(15,23,42,0.92);
-      }}
+      .brand-text {{ line-height: 1.0; font-weight: 1000; letter-spacing: -0.3px; }}
       .brand-text .moms {{ font-size: 30px; }}
-      .brand-text .style {{
-        font-size: 13px;
-        font-weight: 900;
-        opacity: 0.70;
-        margin-top: 6px;
-      }}
+      .brand-text .style {{ font-size: 13px; font-weight: 900; opacity: 0.70; margin-top: 6px; }}
 
-      .title {{
-        text-align: center;
-        line-height: 1.0;
-      }}
-      .title .t1 {{
-        font-size: 38px;
-        font-weight: 1000;
-        letter-spacing: -1.0px;
-        margin: 0;
-      }}
-      .title .t2 {{
-        font-size: 38px;
-        font-weight: 1000;
-        letter-spacing: -1.0px;
-        margin: 6px 0 0 0;
-      }}
+      .title {{ text-align: center; line-height: 1.0; }}
+      .title .t1 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 0; }}
+      .title .t2 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 6px 0 0 0; }}
 
-      .rightbox {{
-        height: 104px;
-        border-radius: 18px;
-        background: #ffffff;
-        border: 2.5px solid rgba(15,23,42,0.32);
-        box-shadow: 0 6px 14px rgba(15,23,42,0.08);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        padding: 10px 12px;
-        box-sizing: border-box;
-      }}
-      .rightbox .label {{
-        font-size: 30px;
-        font-weight: 1000;
-        letter-spacing: -0.3px;
-        color: rgba(15,23,42,0.92);
-      }}
+      .rightbox .label {{ font-size: 30px; font-weight: 1000; letter-spacing: -0.3px; }}
 
       table {{
         border-collapse: separate;
@@ -348,18 +311,12 @@ def _build_weekday_poster_html(
         width: 100%;
         table-layout: fixed;
       }}
-      th {{
-        font-size: 15px;
-        font-weight: 1000;
-        text-align:center;
-        padding: 2px 0 0 0;
-        color: rgba(15,23,42,0.92);
-      }}
+      th {{ font-size: 15px; font-weight: 1000; text-align:center; padding: 2px 0 0 0; }}
       td {{
         height: {cell_h}px;
         vertical-align: top;
         background: #ffffff;
-        border: 2.5px solid rgba(15,23,42,0.30);
+        border: 2.6px solid rgba(15,23,42,0.32);
         border-radius: 14px;
         box-shadow: 0 8px 14px rgba(15,23,42,0.07);
         padding: 10px 12px;
@@ -368,22 +325,13 @@ def _build_weekday_poster_html(
       }}
       .empty {{
         background: #ffffff;
-        border: 2.5px dashed rgba(15,23,42,0.20);
+        border: 2.6px dashed rgba(15,23,42,0.22);
         box-shadow: none;
       }}
 
-      .has-change {{
-        border-color: rgba(196,0,0,0.45);
-        background: rgba(255, 246, 246, 0.92);
-      }}
-      .no-delivery {{
-        border-color: rgba(176,0,32,0.38);
-        background: rgba(255, 240, 244, 0.92);
-      }}
-      .both {{
-        border-color: rgba(125, 60, 152, 0.45);
-        background: rgba(248, 244, 255, 0.92);
-      }}
+      .has-change {{ border-color: rgba(196,0,0,0.50); background: rgba(255, 246, 246, 0.92); }}
+      .no-delivery {{ border-color: rgba(176,0,32,0.42); background: rgba(255, 240, 244, 0.92); }}
+      .both {{ border-color: rgba(125, 60, 152, 0.50); background: rgba(248, 244, 255, 0.92); }}
 
       .cell-top {{
         display:flex;
@@ -391,19 +339,8 @@ def _build_weekday_poster_html(
         align-items: center;
         margin-bottom: 8px;
       }}
-      .datechip {{
-        display:inline-flex;
-        align-items:baseline;
-        gap: 8px;
-        font-weight: 1000;
-        font-size: 16px;
-        letter-spacing: -0.3px;
-      }}
-      .dow {{
-        font-size: 12.5px;
-        font-weight: 900;
-        opacity: 0.72;
-      }}
+      .datechip {{ display:inline-flex; align-items:baseline; gap: 8px; font-weight: 1000; font-size: 16px; letter-spacing: -0.3px; }}
+      .dow {{ font-size: 12.5px; font-weight: 900; opacity: 0.72; }}
 
       .badge-nodelivery {{
         font-size: 12px;
@@ -416,22 +353,10 @@ def _build_weekday_poster_html(
         letter-spacing: -0.2px;
       }}
 
-      .menu {{
-        font-size: 16px;
-        line-height: 1.18;
-        letter-spacing: -0.35px;
-        word-break: keep-all;
-      }}
-      .base {{
-        font-weight: 1000;
-        color: rgba(15,23,42,0.93);
-      }}
+      .menu {{ font-size: 16px; line-height: 1.18; letter-spacing: -0.35px; word-break: keep-all; }}
+      .base {{ font-weight: 1000; }}
 
-      .change {{
-        margin-top: 10px;
-        font-weight: 1000;
-        color: #c40000;
-      }}
+      .change {{ margin-top: 10px; font-weight: 1000; color: #c40000; }}
       .change .label {{
         display:inline-block;
         font-size: 12px;
@@ -450,19 +375,18 @@ def _build_weekday_poster_html(
     body_rows = []
     for wk in rows5:
         tds = []
-        for col, day in enumerate(wk):  # col: 0..4
+        for day in wk:
             if day == 0:
                 tds.append('<td class="empty"></td>')
                 continue
 
-            # 실제 요일 계산(월~금만 들어오지만 안전하게)
             dt = date(y, m, day)
             dow = WEEKDAY_FULL[dt.weekday()]
 
             rec = data_map.get(day, {})
-            base = html.escape(rec.get("base", "").strip())
-            change = html.escape(rec.get("change", "").strip())
-            delivery = (rec.get("delivery", "Y") or "Y").strip().upper()
+            base = html.escape(_safe_str(rec.get("base", "")))
+            change = html.escape(_safe_str(rec.get("change", "")))
+            delivery = _safe_str(rec.get("delivery", "Y")).upper()
 
             is_nodelivery = (delivery == "N")
             has_change = bool(change)
@@ -475,7 +399,7 @@ def _build_weekday_poster_html(
             elif is_nodelivery:
                 cls = "no-delivery"
 
-            badge = f'<span class="badge-nodelivery">배달불요</span>' if is_nodelivery else ""
+            badge = '<span class="badge-nodelivery">배달불요</span>' if is_nodelivery else ""
             base_line = f'<div class="menu base">{base}</div>' if base else '<div class="menu base">&nbsp;</div>'
             change_block = f'<div class="menu change"><span class="label">변경</span>{change}</div>' if change else ""
 
@@ -495,14 +419,11 @@ def _build_weekday_poster_html(
     return f"""
     <!doctype html>
     <html lang="ko">
-      <head>
-        <meta charset="utf-8"/>
-        {css}
-      </head>
+      <head><meta charset="utf-8"/>{css}</head>
       <body>
         <div class="sheet">
           <div class="header">
-            <div class="brand">
+            <div class="box brand">
               {logo_html}
               <div class="brand-text">
                 <div class="moms">MOMS</div>
@@ -515,16 +436,14 @@ def _build_weekday_poster_html(
               <p class="t2">{html.escape(title_bottom)}</p>
             </div>
 
-            <div class="rightbox">
+            <div class="box rightbox">
               <div class="label">{html.escape(right_label)}</div>
             </div>
           </div>
 
           <table>
             <thead>{thead}</thead>
-            <tbody>
-              {''.join(body_rows)}
-            </tbody>
+            <tbody>{''.join(body_rows)}</tbody>
           </table>
         </div>
       </body>
@@ -542,7 +461,7 @@ _ensure_extracted_logo()
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("평일(월~금)만 크게 출력(1장) + 주차 구조 유지(3월도 정상) + 인쇄 선명도 강화")
+st.caption("✅ 3월 오류 해결(결측치 strip 방지) + 평일(월~금) 1장 출력 + 인쇄 선명도 강화")
 
 colL, colR = st.columns([1.05, 1.0], vertical_alignment="top")
 
@@ -554,7 +473,7 @@ with colL:
     with c1:
         new_item = st.text_input("메뉴 추가", placeholder="예: 소고기미역국")
         if st.button("➕ 인덱스에 추가", use_container_width=True):
-            x = (new_item or "").strip()
+            x = _safe_str(new_item)
             if x:
                 if x not in idx_items:
                     idx_items.append(x)
@@ -572,8 +491,8 @@ with colL:
                 st.success("삭제 완료")
 
     st.divider()
-
     st.subheader("2) 월 선택 & 날짜별 입력")
+
     today = date.today()
     y = st.selectbox("연도", list(range(today.year - 2, today.year + 4)), index=2)
     m = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
@@ -588,9 +507,9 @@ with colL:
     change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
     deliv_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
 
-    cur_base = base_df.loc[base_df["date"] == key, "base_menu"].iloc[0] if (base_df["date"] == key).any() else ""
-    cur_change = change_df.loc[change_df["date"] == key, "change_menu"].iloc[0] if (change_df["date"] == key).any() else ""
-    cur_deliv = deliv_df.loc[deliv_df["date"] == key, "delivery"].iloc[0] if (deliv_df["date"] == key).any() else "Y"
+    cur_base = _safe_str(base_df.loc[base_df["date"] == key, "base_menu"].iloc[0]) if (base_df["date"] == key).any() else ""
+    cur_change = _safe_str(change_df.loc[change_df["date"] == key, "change_menu"].iloc[0]) if (change_df["date"] == key).any() else ""
+    cur_deliv = _safe_str(deliv_df.loc[deliv_df["date"] == key, "delivery"].iloc[0]).upper() if (deliv_df["date"] == key).any() else "Y"
     if cur_deliv not in ["Y", "N"]:
         cur_deliv = "Y"
 
@@ -605,7 +524,7 @@ with colL:
     b1, b2 = st.columns([1, 1])
     with b1:
         if st.button("💾 기본메뉴 저장", use_container_width=True):
-            _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel, "base_menu", (base_text or "").strip())
+            _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel, "base_menu", _safe_str(base_text))
             st.success("기본메뉴 저장 완료")
     with b2:
         if st.button("🧹 기본메뉴 삭제(해당일)", use_container_width=True):
@@ -614,15 +533,14 @@ with colL:
 
     st.markdown("**변경메뉴(있으면 입력)**")
     change_pick = st.selectbox("변경메뉴(인덱스)", ["(없음)"] + idx_items, index=0)
-    default_change = "" if cur_change.strip() == "" else cur_change
-    change_text = st.text_input("변경메뉴(직접입력)", value=default_change if change_pick == "(없음)" else change_pick)
+    change_text = st.text_input("변경메뉴(직접입력)", value=cur_change if change_pick == "(없음)" else change_pick)
     if change_pick != "(없음)":
         change_text = change_pick
 
     c3, c4 = st.columns([1, 1])
     with c3:
         if st.button("💾 변경메뉴 저장", use_container_width=True):
-            _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", (change_text or "").strip())
+            _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", _safe_str(change_text))
             st.success("변경메뉴 저장 완료")
     with c4:
         if st.button("🧹 변경메뉴 삭제(해당일)", use_container_width=True):
@@ -639,8 +557,6 @@ with colR:
     st.subheader("3) 포스터(출력용 1장) 미리보기")
 
     right_label = st.text_input("우측 상단 표기", value="동약협회")
-
-    # ✅ 제목 2줄 고정
     title_top = f"맘스락 {m:02d}월"
     title_bottom = "식단 변경"
 
@@ -651,7 +567,7 @@ with colR:
         m=m,
         title_top=title_top,
         title_bottom=title_bottom,
-        right_label=(right_label or "동약협회").strip(),
+        right_label=_safe_str(right_label) or "동약협회",
         logo_uri=logo_uri,
     )
 
