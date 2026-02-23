@@ -28,12 +28,8 @@ CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
-# ✅ 로고 자동 추출용(업로드 UI는 삭제했습니다)
-# - 아래 파일을 data 폴더에 넣어두면, 앱이 실행될 때 좌측 상단 로고를 자동으로 추출합니다.
-#   data/moms_poster_source.jpg  (부회장님이 올려주신 포스터 사진 원본)
+# ✅ 로고 자동 추출(업로드 UI 없음)
 POSTER_SOURCE_PATH = DATA_DIR / "moms_poster_source.jpg"
-
-# - 추출된 로고는 여기에 저장됩니다(자동 생성)
 EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
 
 # 평일(월~금)만 출력
@@ -107,7 +103,7 @@ def _write_menu_index(items: list[str]) -> None:
 # -----------------------------
 # 이미지(Data URI)
 # -----------------------------
-def _data_uri(path: Path | None) -> str | None:
+def _data_uri(path: Path) -> str | None:
     if path is None or (not path.exists()):
         return None
     b = path.read_bytes()
@@ -120,12 +116,6 @@ def _data_uri(path: Path | None) -> str | None:
 # ✅ 포스터 사진에서 M 로고 자동 추출
 # -----------------------------
 def _ensure_extracted_logo() -> None:
-    """
-    - data/moms_poster_source.jpg 가 있으면, 좌측 상단 영역에서 로고를 추출해
-      data/moms_logo_extracted.png 로 저장합니다.
-    - 업로드 UI 없이, 파일만 data 폴더에 넣어두면 자동 반영됩니다.
-    (정확도: 높음, 단 사진 구도가 크게 다르면 크롭을 약간 조정해야 할 수 있음)
-    """
     if EXTRACTED_LOGO_PATH.exists():
         return
     if not POSTER_SOURCE_PATH.exists():
@@ -137,37 +127,29 @@ def _ensure_extracted_logo() -> None:
         img = Image.open(POSTER_SOURCE_PATH).convert("RGB")
         w, h = img.size
 
-        # 1) 좌측 상단 대략 영역(포스터마다 로고 위치가 매우 유사)
-        #    - 너비 0~30%, 높이 0~30% 구간에서 로고를 찾습니다.
-        crop = img.crop((0, 0, int(w * 0.30), int(h * 0.30)))
+        # 좌측 상단 넓게 잡고(0~32%, 0~32%) 로고 bbox 자동 추정
+        crop = img.crop((0, 0, int(w * 0.32), int(h * 0.32)))
         crop = ImageOps.autocontrast(crop)
 
-        # 2) 흰 배경/하늘 배경을 제외하고 "진한 픽셀"만 남겨 bbox 추정
-        #    (로고는 대비가 높은 편이라 bbox가 대체로 안정적으로 잡힙니다)
         gray = crop.convert("L")
-        # 밝은 픽셀은 배경으로 간주(임계값 230)
         bw = gray.point(lambda p: 255 if p < 230 else 0, mode="1")
         bbox = bw.getbbox()
 
         if bbox:
-            # bbox에 여백 조금 추가
             x0, y0, x1, y1 = bbox
-            pad = 12
+            pad = 14
             x0 = max(0, x0 - pad)
             y0 = max(0, y0 - pad)
             x1 = min(crop.size[0], x1 + pad)
             y1 = min(crop.size[1], y1 + pad)
             logo = crop.crop((x0, y0, x1, y1))
         else:
-            # bbox 실패 시, 더 좁은 경험적 크롭(안전망)
             logo = crop.crop((0, 0, int(crop.size[0] * 0.70), int(crop.size[1] * 0.70)))
 
-        # 3) 출력에 선명하도록 약간 크게 저장
         logo = logo.resize((420, int(420 * logo.size[1] / max(1, logo.size[0]))))
         logo.save(EXTRACTED_LOGO_PATH, format="PNG", optimize=True)
 
     except Exception:
-        # PIL 없거나 처리 실패 시: 그냥 저장 안 함(대체 로고로 표시됨)
         return
 
 
@@ -214,7 +196,7 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 
 
 # -----------------------------
-# 평일(월~금) 포스터 HTML
+# ✅ 평일(월~금) 달력(주차 구조 유지) 포스터 HTML
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -226,35 +208,25 @@ def _build_weekday_poster_html(
 ) -> str:
     data_map = _get_day_record_map(y, m)
 
-    # 월의 모든 평일(월~금)만
-    last_day = calendar.monthrange(y, m)[1]
-    weekdays: list[date] = []
-    for d in range(1, last_day + 1):
-        dt = date(y, m, d)
-        if dt.weekday() <= 4:
-            weekdays.append(dt)
+    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
+    weeks7 = cal.monthdayscalendar(y, m)     # 각 주: [월..일], 해당월 아니면 0
 
-    # 5열로 채우기
-    rows: list[list[date | None]] = []
-    row: list[date | None] = []
-    for dt in weekdays:
-        row.append(dt)
-        if len(row) == 5:
-            rows.append(row)
-            row = []
-    if row:
-        while len(row) < 5:
-            row.append(None)
-        rows.append(row)
+    # ✅ 주차 구조 그대로 두고 월~금만 사용
+    rows5: list[list[int]] = []
+    for wk in weeks7:
+        wd = wk[:5]  # 월~금
+        # 주 전체가 0(즉, 월~금이 전부 비어있으면) 스킵
+        if all(d == 0 for d in wd):
+            continue
+        rows5.append(wd)
 
-    row_count = len(rows)
-    cell_h = 126 if row_count <= 4 else 112  # 1장 출력 안정
+    # 1장 출력 안정: 행 수에 따라 셀 높이 자동 조정
+    row_count = len(rows5)
+    cell_h = 126 if row_count <= 4 else 112
 
-    # 로고 (없으면 대체)
     if logo_uri:
         logo_html = f'<img src="{logo_uri}" class="logo-img" alt="logo"/>'
     else:
-        # 대체 로고: 인쇄 선명한 'M' 배지
         logo_html = """
         <div class="logo-fallback"><div class="mf">M</div></div>
         """
@@ -269,7 +241,6 @@ def _build_weekday_poster_html(
         background: #ffffff;
       }}
 
-      /* ✅ 인쇄 선명도: 컬러 유지 + 테두리 강화 */
       @media print {{
         * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
       }}
@@ -281,7 +252,6 @@ def _build_weekday_poster_html(
         box-sizing: border-box;
       }}
 
-      /* 헤더: 좌(로고+MOMS) / 중(제목 2줄) / 우(동약협회) */
       .header {{
         display:grid;
         grid-template-columns: 200px 1fr 200px;
@@ -372,7 +342,6 @@ def _build_weekday_poster_html(
         color: rgba(15,23,42,0.92);
       }}
 
-      /* 달력: 월~금(토/일 제외) */
       table {{
         border-collapse: separate;
         border-spacing: 10px 10px;
@@ -390,7 +359,7 @@ def _build_weekday_poster_html(
         height: {cell_h}px;
         vertical-align: top;
         background: #ffffff;
-        border: 2.5px solid rgba(15,23,42,0.30);   /* ✅ 선명 */
+        border: 2.5px solid rgba(15,23,42,0.30);
         border-radius: 14px;
         box-shadow: 0 8px 14px rgba(15,23,42,0.07);
         padding: 10px 12px;
@@ -403,7 +372,6 @@ def _build_weekday_poster_html(
         box-shadow: none;
       }}
 
-      /* ✅ 메뉴변경/배달불요 표시(색 구분 + 테두리) */
       .has-change {{
         border-color: rgba(196,0,0,0.45);
         background: rgba(255, 246, 246, 0.92);
@@ -480,15 +448,17 @@ def _build_weekday_poster_html(
     thead = "<tr>" + "".join([f"<th>{w}</th>" for w in WEEKDAY_KR_WD]) + "</tr>"
 
     body_rows = []
-    for r in rows:
+    for wk in rows5:
         tds = []
-        for dt in r:
-            if dt is None:
+        for col, day in enumerate(wk):  # col: 0..4
+            if day == 0:
                 tds.append('<td class="empty"></td>')
                 continue
 
-            day = dt.day
+            # 실제 요일 계산(월~금만 들어오지만 안전하게)
+            dt = date(y, m, day)
             dow = WEEKDAY_FULL[dt.weekday()]
+
             rec = data_map.get(day, {})
             base = html.escape(rec.get("base", "").strip())
             change = html.escape(rec.get("change", "").strip())
@@ -507,10 +477,7 @@ def _build_weekday_poster_html(
 
             badge = f'<span class="badge-nodelivery">배달불요</span>' if is_nodelivery else ""
             base_line = f'<div class="menu base">{base}</div>' if base else '<div class="menu base">&nbsp;</div>'
-
-            change_block = ""
-            if change:
-                change_block = f'<div class="menu change"><span class="label">변경</span>{change}</div>'
+            change_block = f'<div class="menu change"><span class="label">변경</span>{change}</div>' if change else ""
 
             tds.append(f"""
             <td class="{cls}">
@@ -575,7 +542,7 @@ _ensure_extracted_logo()
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("평일(월~금)만 크게 출력되도록 구성했습니다. 변경/배달불요는 색으로 구분되고, 인쇄 선명도를 강화했습니다.")
+st.caption("평일(월~금)만 크게 출력(1장) + 주차 구조 유지(3월도 정상) + 인쇄 선명도 강화")
 
 colL, colR = st.columns([1.05, 1.0], vertical_alignment="top")
 
@@ -673,11 +640,10 @@ with colR:
 
     right_label = st.text_input("우측 상단 표기", value="동약협회")
 
-    # ✅ 제목: 2줄로 고정
+    # ✅ 제목 2줄 고정
     title_top = f"맘스락 {m:02d}월"
     title_bottom = "식단 변경"
 
-    # ✅ 자동 추출된 로고 우선 사용
     logo_uri = _data_uri(EXTRACTED_LOGO_PATH)
 
     poster_html = _build_weekday_poster_html(
@@ -700,5 +666,3 @@ with colR:
         mime="text/html",
         use_container_width=True,
     )
-
-    st.info("인쇄 권장: 가로 / 여백 좁게 / 한 페이지에 맞춤")
