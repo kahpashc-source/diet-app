@@ -28,52 +28,18 @@ CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
+# ✅ GitHub 업로드 상태(스크린샷 기준)
+# - 루트: association_logo.png
+# - 루트: datamoms_poster_source.jpg
+EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
+ASSOC_LOGO_ROOT = APP_DIR / "association_logo.png"
+ASSOC_LOGO_DATA = DATA_DIR / "association_logo.png"
+
+POSTER_SRC_ROOT = APP_DIR / "datamoms_poster_source.jpg"
+POSTER_SRC_DATA = DATA_DIR / "moms_poster_source.jpg"
+
 WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]
 WEEKDAY_FULL = ["월", "화", "수", "목", "금", "토", "일"]
-
-# (자동 생성) 추출된 M 로고 저장 위치
-EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
-
-
-# -----------------------------
-# 파일 찾기(루트 / data 모두 지원)
-# -----------------------------
-def _find_existing(paths: list[Path]) -> Path | None:
-    for p in paths:
-        try:
-            if p.exists():
-                return p
-        except Exception:
-            pass
-    return None
-
-
-def _find_assoc_logo() -> Path | None:
-    # GitHub 스샷 기준: 루트에 association_logo.png
-    candidates = [
-        APP_DIR / "association_logo.png",
-        DATA_DIR / "association_logo.png",
-        APP_DIR / "association_logo.jpg",
-        DATA_DIR / "association_logo.jpg",
-        APP_DIR / "association_logo.jpeg",
-        DATA_DIR / "association_logo.jpeg",
-        APP_DIR / "association_logo.webp",
-        DATA_DIR / "association_logo.webp",
-    ]
-    return _find_existing(candidates)
-
-
-def _find_poster_source() -> Path | None:
-    # GitHub 스샷 기준: 루트에 datamoms_poster_source.jpg
-    candidates = [
-        APP_DIR / "datamoms_poster_source.jpg",
-        APP_DIR / "datamoms_poster_source.jpeg",
-        APP_DIR / "datamoms_poster_source.png",
-        APP_DIR / "moms_poster_source.jpg",
-        DATA_DIR / "moms_poster_source.jpg",
-        DATA_DIR / "datamoms_poster_source.jpg",
-    ]
-    return _find_existing(candidates)
 
 
 # -----------------------------
@@ -97,6 +63,19 @@ def _safe_filename(s: str) -> str:
     s = re.sub(r'[\\/:*?"<>|\n\r\t]+', "_", s)
     s = re.sub(r"\s+", "_", s).strip("_")
     return s[:120]
+
+
+# -----------------------------
+# 파일 찾기
+# -----------------------------
+def _first_exists(*paths: Path) -> Path | None:
+    for p in paths:
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            pass
+    return None
 
 
 # -----------------------------
@@ -176,13 +155,13 @@ def _data_uri(path: Path | None) -> str | None:
 
 
 # -----------------------------
-# ✅ 포스터 사진에서 M 로고 자동 추출 (루트/데이터 어디든)
+# ✅ 포스터 사진에서 M 로고 자동 추출 (이전 방식 유지)
 # -----------------------------
-def _ensure_extracted_moms_logo() -> None:
+def _ensure_extracted_logo() -> None:
     if EXTRACTED_LOGO_PATH.exists():
         return
 
-    src = _find_poster_source()
+    src = _first_exists(POSTER_SRC_ROOT, POSTER_SRC_DATA)
     if src is None:
         return
 
@@ -192,7 +171,6 @@ def _ensure_extracted_moms_logo() -> None:
         img = Image.open(src).convert("RGB")
         w, h = img.size
 
-        # 좌측 상단에서 로고 영역 찾기
         crop = img.crop((0, 0, int(w * 0.32), int(h * 0.32)))
         crop = ImageOps.autocontrast(crop)
 
@@ -214,7 +192,6 @@ def _ensure_extracted_moms_logo() -> None:
         logo = logo.resize((420, int(420 * logo.size[1] / max(1, logo.size[0]))))
         logo.save(EXTRACTED_LOGO_PATH, format="PNG", optimize=True)
     except Exception:
-        # PIL 미설치 등일 경우: 그냥 대체 로고(M) 사용
         return
 
 
@@ -271,7 +248,7 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 
 
 # -----------------------------
-# ✅ 날짜 선택 UI: 월~금 달력 버튼
+# ✅ 날짜 선택 UI: 월~금 달력 버튼(효율형)
 # -----------------------------
 def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
     cal = calendar.Calendar(firstweekday=0)
@@ -308,7 +285,7 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
 
 
 # -----------------------------
-# 포스터 HTML (평일 / 1페이지 고정 / 색상 분리 / 로고 적용)
+# 포스터 HTML (MOMS 로고 박스: 이전(더 낫던) 스타일로 복귀)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -331,13 +308,14 @@ def _build_weekday_poster_html(
         rows5.append(wd)
 
     row_count = len(rows5)
-    cell_h = 122 if row_count <= 4 else 104  # 1페이지 보장(5행이면 타이트)
+    cell_h = 122 if row_count <= 4 else 104
 
-    moms_logo_html = (
-        f'<img src="{moms_logo_uri}" class="moms-logo-img" alt="MOMS logo"/>'
-        if moms_logo_uri else
-        '<div class="moms-logo-fallback">M</div>'
-    )
+    # ✅ 이전처럼 "로고+MOMS"를 더 깔끔한 비율로 배치
+    if moms_logo_uri:
+        moms_logo_html = f'<img src="{moms_logo_uri}" class="moms-logo-img" alt="MOMS logo"/>'
+    else:
+        moms_logo_html = '<div class="moms-logo-fallback">M</div>'
+
     assoc_html = f'<img src="{assoc_logo_uri}" class="assoc-logo-img" alt="협회 로고"/>' if assoc_logo_uri else ""
 
     css = f"""
@@ -349,6 +327,7 @@ def _build_weekday_poster_html(
         color: #0f172a;
         background: #ffffff;
       }}
+
       .sheet {{ height: 100%; overflow: hidden; }}
 
       @media print {{
@@ -365,42 +344,84 @@ def _build_weekday_poster_html(
         align-items: center;
         margin-bottom: 8px;
       }}
-      .box {{
+
+      /* ✅ 이전(더 낫던) MOMS 박스: 더 둥글고, 내부 여백/비율 안정 */
+      .brand-box {{
         height: 98px;
-        border-radius: 18px;
+        border-radius: 20px;
         background: #ffffff;
-        border: 2.8px solid rgba(15,23,42,0.36);
-        box-shadow: 0 6px 12px rgba(15,23,42,0.06);
+        border: 2px solid rgba(15,23,42,0.28);
+        box-shadow: 0 10px 18px rgba(15,23,42,0.10);
+        display:flex;
+        align-items:center;
+        justify-content:flex-start;
+        gap: 14px;
+        padding: 14px 16px;
+        box-sizing: border-box;
+      }}
+      .moms-logo-img {{
+        height: 64px;
+        width: auto;
+        object-fit: contain;
+        border-radius: 14px;
+      }}
+      .moms-logo-fallback {{
+        height: 64px; width: 64px;
+        border-radius: 16px;
+        display:flex; align-items:center; justify-content:center;
+        font-weight: 1000; font-size: 44px;
+        border: 2px solid rgba(15,23,42,0.18);
+        background: rgba(0,0,0,0.03);
+      }}
+      .brand-text {{
+        line-height: 1.0;
+        font-weight: 1000;
+        letter-spacing: -0.3px;
+      }}
+      .brand-text .moms {{
+        font-size: 30px;
+      }}
+
+      .title {{
+        text-align: center;
+        line-height: 1.0;
+      }}
+      .title .t1 {{
+        font-size: 38px;
+        font-weight: 1000;
+        letter-spacing: -1.0px;
+        margin: 0;
+      }}
+      .title .t2 {{
+        font-size: 38px;
+        font-weight: 1000;
+        letter-spacing: -1.0px;
+        margin: 6px 0 0 0;
+      }}
+
+      .right-box {{
+        height: 98px;
+        border-radius: 20px;
+        background: #ffffff;
+        border: 2px solid rgba(15,23,42,0.28);
+        box-shadow: 0 10px 18px rgba(15,23,42,0.10);
         display:flex;
         align-items:center;
         justify-content:center;
-        padding: 10px 12px;
+        gap: 12px;
+        padding: 14px 16px;
         box-sizing: border-box;
       }}
-
-      /* 좌측: M 로고 + MOMS (Style 없음) */
-      .brand {{ justify-content: center; gap: 12px; }}
-      .moms-logo-img {{ height: 70px; width: auto; object-fit: contain; }}
-      .moms-logo-fallback {{
-        height: 70px; width: 70px;
-        border-radius: 18px;
-        display:flex; align-items:center; justify-content:center;
-        font-weight: 1000; font-size: 46px;
-        border: 2px solid rgba(15,23,42,0.22);
-        background: rgba(0,0,0,0.02);
+      .assoc-logo-img {{
+        height: 60px;
+        width: 60px;
+        object-fit: contain;
       }}
-      .brand-text {{ line-height: 1.0; font-weight: 1000; letter-spacing: -0.3px; }}
-      .brand-text .moms {{ font-size: 30px; }}
-
-      /* 중앙 제목(2줄) */
-      .title {{ text-align: center; line-height: 1.0; }}
-      .title .t1 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 0; }}
-      .title .t2 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 6px 0 0 0; }}
-
-      /* 우측: 협회 로고 + 동약협회 */
-      .rightbox {{ justify-content: center; gap: 12px; }}
-      .assoc-logo-img {{ height: 62px; width: 62px; object-fit: contain; }}
-      .rightbox .label {{ font-size: 30px; font-weight: 1000; letter-spacing: -0.3px; }}
+      .right-box .label {{
+        font-size: 30px;
+        font-weight: 1000;
+        letter-spacing: -0.3px;
+      }}
 
       table {{
         border-collapse: separate;
@@ -408,12 +429,17 @@ def _build_weekday_poster_html(
         width: 100%;
         table-layout: fixed;
       }}
-      th {{ font-size: 15px; font-weight: 1000; text-align:center; padding: 0; }}
+      th {{
+        font-size: 15px;
+        font-weight: 1000;
+        text-align:center;
+        padding: 0;
+      }}
       td {{
         height: {cell_h}px;
         vertical-align: top;
         background: #ffffff;
-        border: 2.8px solid rgba(15,23,42,0.34);
+        border: 2.4px solid rgba(15,23,42,0.32);
         border-radius: 14px;
         box-shadow: 0 7px 12px rgba(15,23,42,0.06);
         padding: 10px 12px;
@@ -422,11 +448,10 @@ def _build_weekday_poster_html(
       }}
       .empty {{
         background: #ffffff;
-        border: 2.8px dashed rgba(15,23,42,0.22);
+        border: 2.4px dashed rgba(15,23,42,0.22);
         box-shadow: none;
       }}
 
-      /* 변경/배달불요 칸 색상 분리 */
       .has-change {{
         border-color: rgba(184, 134, 11, 0.55);
         background: rgba(255, 250, 235, 0.96);
@@ -454,7 +479,11 @@ def _build_weekday_poster_html(
         font-size: 16px;
         letter-spacing: -0.3px;
       }}
-      .dow {{ font-size: 12.5px; font-weight: 900; opacity: 0.72; }}
+      .dow {{
+        font-size: 12.5px;
+        font-weight: 900;
+        opacity: 0.72;
+      }}
       .badge-nodelivery {{
         font-size: 12px;
         font-weight: 1000;
@@ -544,7 +573,7 @@ def _build_weekday_poster_html(
       <body>
         <div class="sheet">
           <div class="header">
-            <div class="box brand">
+            <div class="brand-box">
               {moms_logo_html}
               <div class="brand-text"><div class="moms">MOMS</div></div>
             </div>
@@ -554,7 +583,7 @@ def _build_weekday_poster_html(
               <p class="t2">{html.escape(title_bottom)}</p>
             </div>
 
-            <div class="box rightbox">
+            <div class="right-box">
               {assoc_html}
               <div class="label">{html.escape(right_label)}</div>
             </div>
@@ -573,14 +602,14 @@ def _build_weekday_poster_html(
 # -----------------------------
 # 시작 시 로고 자동 추출 시도
 # -----------------------------
-_ensure_extracted_moms_logo()
+_ensure_extracted_logo()
 
 
 # -----------------------------
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("날짜 선택을 평일 달력 버튼으로 개선했고, 협회 로고는 루트/데이터 어디에 있어도 자동 인식합니다.")
+st.caption("요청대로 MOMS 로고 박스를 ‘이전(더 좋던) 스타일’로 되돌렸습니다. 날짜 선택은 평일 달력 버튼 유지.")
 
 colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
@@ -687,7 +716,9 @@ with colR:
     title_bottom = "식단 변경"
 
     moms_logo_uri = _data_uri(EXTRACTED_LOGO_PATH)
-    assoc_logo_uri = _data_uri(_find_assoc_logo())
+
+    assoc_path = _first_exists(ASSOC_LOGO_ROOT, ASSOC_LOGO_DATA)
+    assoc_logo_uri = _data_uri(assoc_path)
 
     poster_html = _build_weekday_poster_html(
         y=y,
@@ -712,5 +743,3 @@ with colR:
         mime="text/html",
         use_container_width=True,
     )
-
-    st.info("PDF 저장: HTML 열기 → Ctrl+P → PDF로 저장(가로/여백 최소). 1페이지 고정(넘치면 칸 안에서 잘립니다).")
