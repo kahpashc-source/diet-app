@@ -8,11 +8,11 @@ from datetime import date
 import calendar
 import base64
 import html
+import re
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-
 
 # -----------------------------
 # 기본 설정
@@ -28,20 +28,17 @@ CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
-# ✅ 로고 자동 추출(업로드 UI 없음)
 POSTER_SOURCE_PATH = DATA_DIR / "moms_poster_source.jpg"
 EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
 
-# 평일(월~금)만 출력
 WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]
 WEEKDAY_FULL = ["월", "화", "수", "목", "금", "토", "일"]
 
 
 # -----------------------------
-# 안전 문자열 처리(핵심 버그 수정)
+# 안전 문자열 처리
 # -----------------------------
 def _safe_str(x) -> str:
-    """NaN/None/숫자 등 어떤 값이 와도 안전하게 문자열로 정리."""
     if x is None:
         return ""
     try:
@@ -50,6 +47,19 @@ def _safe_str(x) -> str:
     except Exception:
         pass
     return str(x).strip()
+
+
+def _safe_filename(s: str) -> str:
+    """
+    파일명에 쓰기 어려운 문자를 '_'로 치환.
+    (Windows/Streamlit Cloud 모두 안정)
+    """
+    s = _safe_str(s)
+    if not s:
+        return "식단표"
+    s = re.sub(r'[\\/:*?"<>|\n\r\t]+', "_", s)
+    s = re.sub(r"\s+", "_", s).strip("_")
+    return s[:120]  # 너무 길면 잘라냄
 
 
 # -----------------------------
@@ -62,13 +72,11 @@ def _ensure_csv(path: Path, columns: list[str]) -> None:
 
 def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     _ensure_csv(path, columns)
-    # dtype=str이어도 NaN이 생길 수 있어 후처리로 안전화합니다.
     df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
     for c in columns:
         if c not in df.columns:
             df[c] = ""
     df = df[columns].copy()
-
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date.astype(str)
         df = df[df["date"].ne("NaT")]
@@ -131,7 +139,7 @@ def _data_uri(path: Path) -> str | None:
 
 
 # -----------------------------
-# ✅ 포스터 사진에서 M 로고 자동 추출(있으면)
+# 로고 자동 추출
 # -----------------------------
 def _ensure_extracted_logo() -> None:
     if EXTRACTED_LOGO_PATH.exists():
@@ -168,7 +176,7 @@ def _ensure_extracted_logo() -> None:
 
 
 # -----------------------------
-# 달력 데이터(버그 수정 핵심)
+# 달력 데이터
 # -----------------------------
 def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
     base = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
@@ -220,7 +228,7 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 
 
 # -----------------------------
-# ✅ 평일(월~금) 달력(주차 구조 유지) 포스터 HTML
+# 평일(월~금) 포스터 HTML (1페이지 강제)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -232,17 +240,18 @@ def _build_weekday_poster_html(
 ) -> str:
     data_map = _get_day_record_map(y, m)
 
-    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
-    weeks7 = cal.monthdayscalendar(y, m)     # [월..일]
+    cal = calendar.Calendar(firstweekday=0)
+    weeks7 = cal.monthdayscalendar(y, m)
     rows5: list[list[int]] = []
     for wk in weeks7:
-        wd = wk[:5]  # 월~금
+        wd = wk[:5]
         if all(d == 0 for d in wd):
             continue
         rows5.append(wd)
 
     row_count = len(rows5)
-    cell_h = 126 if row_count <= 4 else 112  # 1장 출력 안정
+    # ✅ 1페이지 강제: 5행이면 더 타이트
+    cell_h = 122 if row_count <= 4 else 104
 
     if logo_uri:
         logo_html = f'<img src="{logo_uri}" class="logo-img" alt="logo"/>'
@@ -251,32 +260,39 @@ def _build_weekday_poster_html(
 
     css = f"""
     <style>
-      @page {{ size: A4 landscape; margin: 7mm; }}
+      @page {{ size: A4 landscape; margin: 6mm; }}
       html, body {{ height: 100%; }}
       body {{
         font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", Arial, sans-serif;
         color: #0f172a;
         background: #ffffff;
       }}
+
+      /* ✅ PDF 1페이지 강제 */
+      .sheet {{ height: 100%; overflow: hidden; }}
+
+      /* ✅ 인쇄 선명도 */
       @media print {{
         * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+        table, tr, td, th {{ page-break-inside: avoid !important; break-inside: avoid !important; }}
       }}
-      .sheet {{ width: 100%; padding: 10px 12px; box-sizing: border-box; }}
+
+      .sheet {{ width: 100%; padding: 8px 10px; box-sizing: border-box; }}
 
       .header {{
         display:grid;
         grid-template-columns: 200px 1fr 200px;
         gap: 10px;
         align-items: center;
-        margin-bottom: 10px;
+        margin-bottom: 8px;
       }}
 
       .box {{
-        height: 104px;
+        height: 98px;
         border-radius: 18px;
         background: #ffffff;
-        border: 2.6px solid rgba(15,23,42,0.34);
-        box-shadow: 0 6px 14px rgba(15,23,42,0.08);
+        border: 2.8px solid rgba(15,23,42,0.36);
+        box-shadow: 0 6px 12px rgba(15,23,42,0.06);
         display:flex;
         align-items:center;
         justify-content:center;
@@ -284,16 +300,16 @@ def _build_weekday_poster_html(
         box-sizing: border-box;
       }}
 
-      .brand {{ justify-content: center; gap: 10px; }}
-      .logo-img {{ height: 74px; width: auto; object-fit: contain; }}
+      .brand {{ gap: 10px; }}
+      .logo-img {{ height: 70px; width: auto; object-fit: contain; }}
       .logo-fallback {{
-        height: 74px; width: 74px;
+        height: 70px; width: 70px;
         border-radius: 20px;
         background: linear-gradient(180deg, rgba(255,120,160,0.55), rgba(255,180,90,0.55));
         border: 2px solid rgba(15,23,42,0.22);
         display:flex; align-items:center; justify-content:center;
       }}
-      .logo-fallback .mf {{ font-size: 54px; font-weight: 1000; color: rgba(15,23,42,0.86); line-height: 1; }}
+      .logo-fallback .mf {{ font-size: 52px; font-weight: 1000; color: rgba(15,23,42,0.86); line-height: 1; }}
 
       .brand-text {{ line-height: 1.0; font-weight: 1000; letter-spacing: -0.3px; }}
       .brand-text .moms {{ font-size: 30px; }}
@@ -311,27 +327,29 @@ def _build_weekday_poster_html(
         width: 100%;
         table-layout: fixed;
       }}
-      th {{ font-size: 15px; font-weight: 1000; text-align:center; padding: 2px 0 0 0; }}
+      thead {{ display: table-header-group; }}
+      th {{ font-size: 15px; font-weight: 1000; text-align:center; padding: 0; }}
+
       td {{
         height: {cell_h}px;
         vertical-align: top;
         background: #ffffff;
-        border: 2.6px solid rgba(15,23,42,0.32);
+        border: 2.8px solid rgba(15,23,42,0.34);
         border-radius: 14px;
-        box-shadow: 0 8px 14px rgba(15,23,42,0.07);
+        box-shadow: 0 7px 12px rgba(15,23,42,0.06);
         padding: 10px 12px;
         box-sizing: border-box;
-        overflow: hidden;
+        overflow: hidden; /* ✅ 넘치면 잘라서 2페이지 방지 */
       }}
       .empty {{
         background: #ffffff;
-        border: 2.6px dashed rgba(15,23,42,0.22);
+        border: 2.8px dashed rgba(15,23,42,0.22);
         box-shadow: none;
       }}
 
-      .has-change {{ border-color: rgba(196,0,0,0.50); background: rgba(255, 246, 246, 0.92); }}
-      .no-delivery {{ border-color: rgba(176,0,32,0.42); background: rgba(255, 240, 244, 0.92); }}
-      .both {{ border-color: rgba(125, 60, 152, 0.50); background: rgba(248, 244, 255, 0.92); }}
+      .has-change {{ border-color: rgba(196,0,0,0.52); background: rgba(255, 246, 246, 0.92); }}
+      .no-delivery {{ border-color: rgba(176,0,32,0.44); background: rgba(255, 240, 244, 0.92); }}
+      .both {{ border-color: rgba(125, 60, 152, 0.52); background: rgba(248, 244, 255, 0.92); }}
 
       .cell-top {{
         display:flex;
@@ -461,7 +479,7 @@ _ensure_extracted_logo()
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("✅ 3월 오류 해결(결측치 strip 방지) + 평일(월~금) 1장 출력 + 인쇄 선명도 강화")
+st.caption("HTML 파일명=제목과 동일 / PDF 1페이지 고정(넘치면 잘라서 2페이지 방지)")
 
 colL, colR = st.columns([1.05, 1.0], vertical_alignment="top")
 
@@ -557,6 +575,8 @@ with colR:
     st.subheader("3) 포스터(출력용 1장) 미리보기")
 
     right_label = st.text_input("우측 상단 표기", value="동약협회")
+
+    # 제목 2줄 고정
     title_top = f"맘스락 {m:02d}월"
     title_bottom = "식단 변경"
 
@@ -575,10 +595,16 @@ with colR:
 
     st.divider()
     st.subheader("4) 업체 전달용 파일 만들기")
+
+    # ✅ 파일명 = 제목과 동일(안전 문자로 변환)
+    dl_name = _safe_filename(f"{title_top}_{title_bottom}_{right_label}") + ".html"
+
     st.download_button(
-        label="⬇️ HTML 다운로드(열고 Ctrl+P → PDF 저장/바로 출력)",
+        label=f"⬇️ HTML 다운로드 ({dl_name})",
         data=poster_html.encode("utf-8"),
-        file_name=f"{y}-{m:02d}_식단표_평일포스터.html",
+        file_name=dl_name,
         mime="text/html",
         use_container_width=True,
     )
+
+    st.info("PDF 저장 시: Ctrl+P → PDF로 저장 (가로 / 여백 최소)  ※ 이 버전은 1페이지를 넘지 않도록 강하게 고정되어 있습니다.")
