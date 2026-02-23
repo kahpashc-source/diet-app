@@ -28,9 +28,11 @@ DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
 BG_IMAGE_PATH = DATA_DIR / "poster_bg.jpg"          # 포스터 배경(선택)
-LOGO_IMAGE_PATH = DATA_DIR / "moms_logo.png"        # 좌측 로고(선택)
+LOGO_IMAGE_PATH = DATA_DIR / "moms_logo.png"        # M 로고(선택)
 
-WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
+# 평일(월~금)만 출력
+WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]
+WEEKDAY_FULL = ["월", "화", "수", "목", "금", "토", "일"]
 
 
 # -----------------------------
@@ -106,13 +108,20 @@ def _save_bytes(path: Path, uploaded_file) -> None:
 
 
 def _data_uri(path: Path) -> str | None:
-    if not path.exists():
+    if path is None or (not path.exists()):
         return None
     b = path.read_bytes()
-    # 확장자에 따라 mime 결정(대부분 문제 없음)
     ext = path.suffix.lower().lstrip(".")
     mime = "image/png" if ext == "png" else "image/jpeg"
     return f"data:{mime};base64," + base64.b64encode(b).decode("utf-8")
+
+
+def _find_logo_path() -> Path | None:
+    # data 폴더의 moms_logo.* 중 첫 번째 사용
+    for p in sorted(DATA_DIR.glob("moms_logo.*")):
+        return p
+    # 기본 경로도 확인
+    return LOGO_IMAGE_PATH if LOGO_IMAGE_PATH.exists() else None
 
 
 # -----------------------------
@@ -158,18 +167,43 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 
 
 # -----------------------------
-# 포스터 HTML
+# 평일(월~금) 포스터 HTML
 # -----------------------------
-def _build_poster_html(
+def _build_weekday_poster_html(
     y: int,
     m: int,
     title: str,
+    right_label: str,
     bg_uri: str | None,
     logo_uri: str | None,
 ) -> str:
-    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
-    weeks = cal.monthdayscalendar(y, m)
     data_map = _get_day_record_map(y, m)
+
+    # 월의 모든 평일을 순서대로 모으기
+    last_day = calendar.monthrange(y, m)[1]
+    weekdays: list[date] = []
+    for d in range(1, last_day + 1):
+        dt = date(y, m, d)
+        if dt.weekday() <= 4:  # 0=월 ... 4=금
+            weekdays.append(dt)
+
+    # 5열(월~금)로 채우기
+    rows: list[list[date | None]] = []
+    row: list[date | None] = []
+    for dt in weekdays:
+        row.append(dt)
+        if len(row) == 5:
+            rows.append(row)
+            row = []
+    if row:
+        while len(row) < 5:
+            row.append(None)
+        rows.append(row)
+
+    # 1페이지 맞춤: 행 수에 따라 셀 높이 조정
+    row_count = len(rows)
+    # 일반적으로 4~5행. 5행이면 조금 타이트하게.
+    cell_h = 124 if row_count <= 4 else 110
 
     # 배경
     if bg_uri:
@@ -189,16 +223,20 @@ def _build_poster_html(
         }
         """
 
-    # 1페이지 자동 맞춤: 6주면 더 낮게
-    row_count = len(weeks)
-    cell_h = 104 if row_count == 5 else 94
-
     logo_html = ""
     if logo_uri:
         logo_html = f'<img src="{logo_uri}" class="logo-img" alt="logo"/>'
+    else:
+        # 로고가 없을 때도 "M" 느낌의 대체 로고(인쇄용)
+        logo_html = """
+        <div class="logo-fallback">
+          <div class="mf">M</div>
+        </div>
+        """
 
     css = f"""
     <style>
+      /* ✅ 1장 출력 전제 */
       @page {{ size: A4 landscape; margin: 7mm; }}
       html, body {{ height: 100%; }}
       {bg_css}
@@ -208,30 +246,30 @@ def _build_poster_html(
         color: #0f172a;
       }}
 
+      /* ✅ 인쇄 선명도: 테두리/텍스트 대비 강화 */
       .sheet {{
         width: 100%;
         border-radius: 18px;
         padding: 10px 12px 10px 12px;
         box-sizing: border-box;
-        background: rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.12);
         backdrop-filter: blur(2px);
       }}
 
-      /* 헤더 */
+      /* 헤더: 좌(로고+MOMS) / 중(제목) / 우(동약협회) */
       .header {{
         display:grid;
-        grid-template-columns: 160px 1fr;
+        grid-template-columns: 180px 1fr 180px;
         gap: 10px;
         align-items: center;
         margin-bottom: 8px;
       }}
 
-      /* 좌측: 로고 + MOMS */
       .brand {{
         height: 98px;
         border-radius: 16px;
-        background: rgba(255,255,255,0.78);
-        border: 1px solid rgba(15,23,42,0.12);
+        background: rgba(255,255,255,0.84);
+        border: 2px solid rgba(15,23,42,0.20);
         box-shadow: 0 6px 16px rgba(15,23,42,0.10);
         display:flex;
         align-items:center;
@@ -241,11 +279,27 @@ def _build_poster_html(
         box-sizing: border-box;
       }}
       .logo-img {{
-        height: 64px;
+        height: 68px;
         width: auto;
         object-fit: contain;
-        filter: drop-shadow(0 4px 10px rgba(15,23,42,0.12));
+        filter: drop-shadow(0 4px 10px rgba(15,23,42,0.10));
       }}
+      .logo-fallback {{
+        height: 68px; width: 68px;
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(255,120,160,0.55), rgba(255,180,90,0.55));
+        border: 2px solid rgba(15,23,42,0.15);
+        display:flex; align-items:center; justify-content:center;
+        box-shadow: inset 0 0 0 2px rgba(255,255,255,0.55);
+      }}
+      .logo-fallback .mf {{
+        font-size: 48px;
+        font-weight: 1000;
+        color: rgba(15,23,42,0.85);
+        text-shadow: 0 2px 0 rgba(255,255,255,0.65);
+        line-height: 1;
+      }}
+
       .brand-text {{
         line-height: 1.0;
         font-weight: 1000;
@@ -253,7 +307,7 @@ def _build_poster_html(
         color: rgba(15,23,42,0.92);
       }}
       .brand-text .moms {{
-        font-size: 26px;
+        font-size: 28px;
       }}
       .brand-text .style {{
         font-size: 13px;
@@ -262,17 +316,36 @@ def _build_poster_html(
         margin-top: 6px;
       }}
 
-      /* 중앙 제목 */
       .title {{
-        font-size: 34px;
+        font-size: 36px;
         font-weight: 1000;
-        letter-spacing: -0.9px;
+        letter-spacing: -1.0px;
         text-align: center;
         color: rgba(15,23,42,0.92);
-        text-shadow: 0 2px 0 rgba(255,255,255,0.65), 0 6px 18px rgba(15,23,42,0.15);
+        text-shadow: 0 2px 0 rgba(255,255,255,0.65), 0 6px 18px rgba(15,23,42,0.12);
       }}
 
-      /* 달력 - 카드형 */
+      /* 우측 상단: MOMS와 같은 크기 느낌으로 */
+      .rightbox {{
+        height: 98px;
+        border-radius: 16px;
+        background: rgba(255,255,255,0.84);
+        border: 2px solid rgba(15,23,42,0.20);
+        box-shadow: 0 6px 16px rgba(15,23,42,0.10);
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        padding: 10px 12px;
+        box-sizing: border-box;
+      }}
+      .rightbox .label {{
+        font-size: 28px;
+        font-weight: 1000;
+        letter-spacing: -0.3px;
+        color: rgba(15,23,42,0.92);
+      }}
+
+      /* 달력: 월~금 5열(토/일 제외) → 훨씬 여유 */
       table {{
         border-collapse: separate;
         border-spacing: 10px 10px;
@@ -280,62 +353,64 @@ def _build_poster_html(
         table-layout: fixed;
       }}
       th {{
-        font-size: 14px;
+        font-size: 15px;
         font-weight: 1000;
         text-align:center;
-        color: rgba(15,23,42,0.90);
+        color: rgba(15,23,42,0.92);
         text-shadow: 0 1px 0 rgba(255,255,255,0.6);
         padding: 2px 0 0 0;
       }}
       td {{
         height: {cell_h}px;
         vertical-align: top;
-        background: rgba(255,255,255,0.84);
-        border: 1px solid rgba(15,23,42,0.18);
+        background: rgba(255,255,255,0.92);
+        border: 2px solid rgba(15,23,42,0.22);      /* ✅ 인쇄 선명 */
         border-radius: 14px;
-        box-shadow: 0 10px 18px rgba(15,23,42,0.12);
-        padding: 8px 10px;
+        box-shadow: 0 10px 18px rgba(15,23,42,0.10);
+        padding: 10px 12px;
         box-sizing: border-box;
         overflow: hidden;
       }}
       .empty {{
-        background: rgba(255,255,255,0.35);
-        border: 1px dashed rgba(15,23,42,0.12);
+        background: rgba(255,255,255,0.40);
+        border: 2px dashed rgba(15,23,42,0.18);
         box-shadow: none;
       }}
 
-      /* ✅ 상태별 색 구분 */
+      /* ✅ 변경/배달불요 색 구분(깔끔하게) */
       .has-change {{
-        border: 2px solid rgba(196,0,0,0.28);
-        background: rgba(255,255,255,0.90);
+        border-color: rgba(196,0,0,0.40);
+        box-shadow: 0 10px 18px rgba(196,0,0,0.10);
       }}
       .no-delivery {{
-        border: 2px solid rgba(176,0,32,0.22);
-        background: rgba(255, 245, 247, 0.92);
+        background: rgba(255, 245, 247, 0.95);
+        border-color: rgba(176,0,32,0.32);
+        box-shadow: 0 10px 18px rgba(176,0,32,0.10);
       }}
       .both {{
-        border: 2px solid rgba(125, 60, 152, 0.28);
-        background: rgba(250, 246, 255, 0.92);
+        background: rgba(250, 246, 255, 0.95);
+        border-color: rgba(125, 60, 152, 0.38);
+        box-shadow: 0 10px 18px rgba(125,60,152,0.10);
       }}
 
       .cell-top {{
         display:flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
       }}
       .datechip {{
         display:inline-flex;
-        align-items:center;
-        gap: 6px;
+        align-items:baseline;
+        gap: 8px;
         font-weight: 1000;
-        font-size: 14px;
-        letter-spacing: -0.2px;
+        font-size: 16px;
+        letter-spacing: -0.3px;
       }}
       .dow {{
-        font-size: 12px;
+        font-size: 12.5px;
         font-weight: 900;
-        opacity: 0.70;
+        opacity: 0.72;
       }}
 
       .badge-nodelivery {{
@@ -343,26 +418,26 @@ def _build_poster_html(
         font-weight: 1000;
         color: #b00020;
         background: rgba(255, 235, 238, 0.98);
-        border: 1px solid rgba(176,0,32,0.25);
-        padding: 3px 9px;
+        border: 1px solid rgba(176,0,32,0.30);
+        padding: 4px 10px;
         border-radius: 999px;
         letter-spacing: -0.2px;
       }}
 
       .menu {{
-        font-size: 14px;
+        font-size: 16px;
         line-height: 1.18;
-        letter-spacing: -0.25px;
+        letter-spacing: -0.35px;
         word-break: keep-all;
       }}
       .base {{
         font-weight: 1000;
-        color: rgba(15,23,42,0.92);
+        color: rgba(15,23,42,0.93);
       }}
 
       /* 변경메뉴: 붉은색 + 굵게 */
       .change {{
-        margin-top: 7px;
+        margin-top: 10px;
         font-weight: 1000;
         color: #c40000;
       }}
@@ -373,24 +448,30 @@ def _build_poster_html(
         padding: 2px 10px;
         border-radius: 999px;
         background: rgba(196,0,0,0.09);
-        border: 1px solid rgba(196,0,0,0.25);
+        border: 1px solid rgba(196,0,0,0.30);
         margin-right: 8px;
       }}
 
-      a {{ color: inherit; text-decoration: none; }}
+      /* 인쇄 시 색이 너무 연하게 나오는 것을 방지 */
+      @media print {{
+        * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+      }}
     </style>
     """
 
-    thead = "<tr>" + "".join([f"<th>{w}</th>" for w in WEEKDAY_KR]) + "</tr>"
+    # 헤더(월~금)
+    thead = "<tr>" + "".join([f"<th>{w}</th>" for w in WEEKDAY_KR_WD]) + "</tr>"
 
-    rows = []
-    for wk in weeks:
+    body_rows = []
+    for r in rows:
         tds = []
-        for i, day in enumerate(wk):  # i: 0..6 (월..일)
-            if day == 0:
+        for dt in r:
+            if dt is None:
                 tds.append('<td class="empty"></td>')
                 continue
 
+            day = dt.day
+            dow = WEEKDAY_FULL[dt.weekday()]
             rec = data_map.get(day, {})
             base = html.escape(rec.get("base", "").strip())
             change = html.escape(rec.get("change", "").strip())
@@ -398,7 +479,6 @@ def _build_poster_html(
             is_nodelivery = (delivery == "N")
             has_change = bool(change)
 
-            # ✅ 상태별 클래스
             cls = ""
             if has_change and is_nodelivery:
                 cls = "both"
@@ -407,18 +487,16 @@ def _build_poster_html(
             elif is_nodelivery:
                 cls = "no-delivery"
 
-            dow = WEEKDAY_KR[i]
             badge = f'<span class="badge-nodelivery">배달불요</span>' if is_nodelivery else ""
-
             base_line = f'<div class="menu base">{base}</div>' if base else '<div class="menu base">&nbsp;</div>'
 
             change_block = ""
             if change:
                 change_block = f"""
-                <div class="menu change"><span class="label">변경메뉴</span>{change}</div>
+                <div class="menu change"><span class="label">변경</span>{change}</div>
                 """
 
-            cell = f"""
+            tds.append(f"""
             <td class="{cls}">
               <div class="cell-top">
                 <div class="datechip">{day:02d}<span class="dow">({dow})</span></div>
@@ -427,10 +505,9 @@ def _build_poster_html(
               {base_line}
               {change_block}
             </td>
-            """
-            tds.append(cell)
+            """)
 
-        rows.append("<tr>" + "".join(tds) + "</tr>")
+        body_rows.append("<tr>" + "".join(tds) + "</tr>")
 
     return f"""
     <!doctype html>
@@ -451,12 +528,16 @@ def _build_poster_html(
             </div>
 
             <div class="title">{html.escape(title)}</div>
+
+            <div class="rightbox">
+              <div class="label">{html.escape(right_label)}</div>
+            </div>
           </div>
 
           <table>
             <thead>{thead}</thead>
             <tbody>
-              {''.join(rows)}
+              {''.join(body_rows)}
             </tbody>
           </table>
         </div>
@@ -469,14 +550,14 @@ def _build_poster_html(
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("맘스락 포스터 느낌(달력 카드형)으로 ‘출력용 1장’을 생성합니다. 변경/배달불요 날짜는 색으로 구분됩니다.")
+st.caption("맘스락 포스터 포맷을 살려 ‘평일(월~금)만’ 크게, 선명하게 1장 출력되도록 구성합니다.")
 
 colL, colR = st.columns([1.05, 1.0], vertical_alignment="top")
 
 with colL:
     st.subheader("0) 포스터 이미지(선택)")
     bg_up = st.file_uploader("배경 이미지 업로드(선택)", type=["jpg", "jpeg", "png", "webp"], key="bg")
-    logo_up = st.file_uploader("좌측 로고 업로드(선택) — 예: MOMS 로고", type=["png", "jpg", "jpeg", "webp"], key="logo")
+    logo_up = st.file_uploader("M 자 로고 업로드(권장: PNG, 투명 배경)", type=["png", "jpg", "jpeg", "webp"], key="logo")
 
     c0a, c0b = st.columns([1, 1])
     with c0a:
@@ -498,14 +579,13 @@ with colL:
             if logo_up is None:
                 st.warning("업로드한 로고 파일이 없습니다.")
             else:
-                # 로고는 png로 저장하는 게 가장 깔끔(투명 배경 가능)
+                # 로고는 업로드 확장자 유지
                 ext = Path(logo_up.name).suffix.lower()
-                LOGO_IMAGE_PATH = DATA_DIR / f"moms_logo{ext}"
-                _save_bytes(LOGO_IMAGE_PATH, logo_up)
-                st.success("로고 저장 완료(확장자 유지)")
+                path = DATA_DIR / f"moms_logo{ext}"
+                _save_bytes(path, logo_up)
+                st.success("로고 저장 완료")
     with c0d:
         if st.button("🧹 로고 삭제", use_container_width=True):
-            # data 폴더 내 moms_logo.* 모두 삭제
             for p in DATA_DIR.glob("moms_logo.*"):
                 try:
                     p.unlink()
@@ -547,7 +627,7 @@ with colL:
     m = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
 
     days = [date(y, m, d) for d in range(1, calendar.monthrange(y, m)[1] + 1)]
-    labels = [f"{d.strftime('%m/%d')}({WEEKDAY_KR[d.weekday()]})" for d in days]
+    labels = [f"{d.strftime('%m/%d')}({WEEKDAY_FULL[d.weekday()]})" for d in days]
     pick = st.selectbox("날짜 선택", list(range(len(days))), format_func=lambda i: labels[i])
     dsel = days[pick]
     key = dsel.isoformat()
@@ -562,7 +642,7 @@ with colL:
     if cur_deliv not in ["Y", "N"]:
         cur_deliv = "Y"
 
-    st.markdown(f"**선택 날짜:** {key}  ({WEEKDAY_KR[dsel.weekday()]})")
+    st.markdown(f"**선택 날짜:** {key}  ({WEEKDAY_FULL[dsel.weekday()]})")
 
     st.markdown("**기본메뉴**")
     base_pick = st.selectbox("기본메뉴(인덱스)", ["(직접입력)"] + idx_items, index=0)
@@ -606,22 +686,18 @@ with colL:
 with colR:
     st.subheader("3) 포스터(출력용 1장) 미리보기")
 
-    org = st.text_input("상단 제목에 들어갈 단체/회사명", value="동약협회")
-    title = f"맘스락 ({m:02d})월 식단 변경 및 배달 불요 내역 - {org}"
+    org = st.text_input("우측 상단 표기", value="동약협회")
+    # ✅ 제목: “맘스락    월 식단변경”
+    title = f"맘스락   {m:02d}월 식단변경"
 
     bg_uri = _data_uri(BG_IMAGE_PATH)
+    logo_uri = _data_uri(_find_logo_path())
 
-    # 로고는 data/moms_logo.* 중 첫 번째를 사용
-    logo_path = None
-    for p in sorted(DATA_DIR.glob("moms_logo.*")):
-        logo_path = p
-        break
-    logo_uri = _data_uri(logo_path) if logo_path else None
-
-    poster_html = _build_poster_html(
+    poster_html = _build_weekday_poster_html(
         y=y,
         m=m,
         title=title,
+        right_label=(org or "동약협회").strip(),
         bg_uri=bg_uri,
         logo_uri=logo_uri,
     )
@@ -633,7 +709,7 @@ with colR:
     st.download_button(
         label="⬇️ HTML 다운로드(열고 Ctrl+P → PDF 저장/바로 출력)",
         data=poster_html.encode("utf-8"),
-        file_name=f"{y}-{m:02d}_식단표_포스터형.html",
+        file_name=f"{y}-{m:02d}_식단표_평일포스터.html",
         mime="text/html",
         use_container_width=True,
     )
