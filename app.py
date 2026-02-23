@@ -28,15 +28,52 @@ CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
-# (선택) 맘스락 포스터 사진에서 좌측 M 로고 자동 추출(있으면)
-POSTER_SOURCE_PATH = DATA_DIR / "moms_poster_source.jpg"
-EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
-
-# ✅ 협회 로고(업로드 UI 없음) : GitHub에 올려둔 파일
-ASSOC_LOGO_PATH = DATA_DIR / "association_logo.png"
-
 WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]
 WEEKDAY_FULL = ["월", "화", "수", "목", "금", "토", "일"]
+
+# (자동 생성) 추출된 M 로고 저장 위치
+EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
+
+
+# -----------------------------
+# 파일 찾기(루트 / data 모두 지원)
+# -----------------------------
+def _find_existing(paths: list[Path]) -> Path | None:
+    for p in paths:
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            pass
+    return None
+
+
+def _find_assoc_logo() -> Path | None:
+    # GitHub 스샷 기준: 루트에 association_logo.png
+    candidates = [
+        APP_DIR / "association_logo.png",
+        DATA_DIR / "association_logo.png",
+        APP_DIR / "association_logo.jpg",
+        DATA_DIR / "association_logo.jpg",
+        APP_DIR / "association_logo.jpeg",
+        DATA_DIR / "association_logo.jpeg",
+        APP_DIR / "association_logo.webp",
+        DATA_DIR / "association_logo.webp",
+    ]
+    return _find_existing(candidates)
+
+
+def _find_poster_source() -> Path | None:
+    # GitHub 스샷 기준: 루트에 datamoms_poster_source.jpg
+    candidates = [
+        APP_DIR / "datamoms_poster_source.jpg",
+        APP_DIR / "datamoms_poster_source.jpeg",
+        APP_DIR / "datamoms_poster_source.png",
+        APP_DIR / "moms_poster_source.jpg",
+        DATA_DIR / "moms_poster_source.jpg",
+        DATA_DIR / "datamoms_poster_source.jpg",
+    ]
+    return _find_existing(candidates)
 
 
 # -----------------------------
@@ -129,7 +166,7 @@ def _write_menu_index(items: list[str]) -> None:
 # -----------------------------
 # 이미지(Data URI)
 # -----------------------------
-def _data_uri(path: Path) -> str | None:
+def _data_uri(path: Path | None) -> str | None:
     if path is None or (not path.exists()):
         return None
     b = path.read_bytes()
@@ -139,18 +176,23 @@ def _data_uri(path: Path) -> str | None:
 
 
 # -----------------------------
-# (선택) 포스터 사진에서 M 로고 자동 추출
+# ✅ 포스터 사진에서 M 로고 자동 추출 (루트/데이터 어디든)
 # -----------------------------
-def _ensure_extracted_logo() -> None:
+def _ensure_extracted_moms_logo() -> None:
     if EXTRACTED_LOGO_PATH.exists():
         return
-    if not POSTER_SOURCE_PATH.exists():
+
+    src = _find_poster_source()
+    if src is None:
         return
+
     try:
         from PIL import Image, ImageOps
 
-        img = Image.open(POSTER_SOURCE_PATH).convert("RGB")
+        img = Image.open(src).convert("RGB")
         w, h = img.size
+
+        # 좌측 상단에서 로고 영역 찾기
         crop = img.crop((0, 0, int(w * 0.32), int(h * 0.32)))
         crop = ImageOps.autocontrast(crop)
 
@@ -172,6 +214,7 @@ def _ensure_extracted_logo() -> None:
         logo = logo.resize((420, int(420 * logo.size[1] / max(1, logo.size[0]))))
         logo.save(EXTRACTED_LOGO_PATH, format="PNG", optimize=True)
     except Exception:
+        # PIL 미설치 등일 경우: 그냥 대체 로고(M) 사용
         return
 
 
@@ -231,23 +274,19 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 # ✅ 날짜 선택 UI: 월~금 달력 버튼
 # -----------------------------
 def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
-    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
+    cal = calendar.Calendar(firstweekday=0)
     weeks7 = cal.monthdayscalendar(y, m)
 
     rows5: list[list[int]] = []
     for wk in weeks7:
-        wd = wk[:5]  # 월~금
+        wd = wk[:5]
         if all(d == 0 for d in wd):
             continue
         rows5.append(wd)
 
     st.markdown("**📅 날짜 선택(평일만)**")
-    st.caption("월~금 버튼을 클릭하면 해당 날짜로 바로 입력합니다.")
-
-    # 선택 강조용
     sel_day = selected.day if (selected.year == y and selected.month == m) else None
 
-    # 헤더
     hcols = st.columns(5)
     for i, w in enumerate(WEEKDAY_KR_WD):
         hcols[i].markdown(f"<div style='text-align:center;font-weight:900'>{w}</div>", unsafe_allow_html=True)
@@ -258,15 +297,10 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
             if day == 0:
                 cols[c].button(" ", key=f"blank_{y}_{m}_{r}_{c}", disabled=True, use_container_width=True)
                 continue
-
             dt = date(y, m, day)
             label = f"{day:02d}"
-            is_sel = (sel_day == day)
-
-            # 선택된 버튼은 표시를 조금 다르게
-            if is_sel:
+            if sel_day == day:
                 label = f"✅ {label}"
-
             if cols[c].button(label, key=f"d_{y}_{m}_{day}", use_container_width=True):
                 st.session_state["selected_date"] = dt
 
@@ -297,18 +331,14 @@ def _build_weekday_poster_html(
         rows5.append(wd)
 
     row_count = len(rows5)
-    cell_h = 122 if row_count <= 4 else 104  # 5행이면 더 타이트(1페이지 보장)
+    cell_h = 122 if row_count <= 4 else 104  # 1페이지 보장(5행이면 타이트)
 
-    # 좌측 MOMS 로고 (없으면 M 대체)
-    if moms_logo_uri:
-        moms_logo_html = f'<img src="{moms_logo_uri}" class="moms-logo-img" alt="MOMS logo"/>'
-    else:
-        moms_logo_html = '<div class="moms-logo-fallback">M</div>'
-
-    # 우측 협회 로고 (없으면 텍스트만)
-    assoc_html = ""
-    if assoc_logo_uri:
-        assoc_html = f'<img src="{assoc_logo_uri}" class="assoc-logo-img" alt="협회 로고"/>'
+    moms_logo_html = (
+        f'<img src="{moms_logo_uri}" class="moms-logo-img" alt="MOMS logo"/>'
+        if moms_logo_uri else
+        '<div class="moms-logo-fallback">M</div>'
+    )
+    assoc_html = f'<img src="{assoc_logo_uri}" class="assoc-logo-img" alt="협회 로고"/>' if assoc_logo_uri else ""
 
     css = f"""
     <style>
@@ -319,11 +349,8 @@ def _build_weekday_poster_html(
         color: #0f172a;
         background: #ffffff;
       }}
-
-      /* PDF 1페이지 고정 */
       .sheet {{ height: 100%; overflow: hidden; }}
 
-      /* 인쇄 색 유지 + 페이지 쪼개짐 방지 */
       @media print {{
         * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
         table, tr, td, th {{ page-break-inside: avoid !important; break-inside: avoid !important; }}
@@ -338,7 +365,6 @@ def _build_weekday_poster_html(
         align-items: center;
         margin-bottom: 8px;
       }}
-
       .box {{
         height: 98px;
         border-radius: 18px;
@@ -352,7 +378,7 @@ def _build_weekday_poster_html(
         box-sizing: border-box;
       }}
 
-      /* 좌측: M 로고 + MOMS (Style 삭제) */
+      /* 좌측: M 로고 + MOMS (Style 없음) */
       .brand {{ justify-content: center; gap: 12px; }}
       .moms-logo-img {{ height: 70px; width: auto; object-fit: contain; }}
       .moms-logo-fallback {{
@@ -376,19 +402,13 @@ def _build_weekday_poster_html(
       .assoc-logo-img {{ height: 62px; width: 62px; object-fit: contain; }}
       .rightbox .label {{ font-size: 30px; font-weight: 1000; letter-spacing: -0.3px; }}
 
-      /* 달력 */
       table {{
         border-collapse: separate;
         border-spacing: 10px 10px;
         width: 100%;
         table-layout: fixed;
       }}
-      th {{
-        font-size: 15px;
-        font-weight: 1000;
-        text-align:center;
-        padding: 0;
-      }}
+      th {{ font-size: 15px; font-weight: 1000; text-align:center; padding: 0; }}
       td {{
         height: {cell_h}px;
         vertical-align: top;
@@ -398,7 +418,7 @@ def _build_weekday_poster_html(
         box-shadow: 0 7px 12px rgba(15,23,42,0.06);
         padding: 10px 12px;
         box-sizing: border-box;
-        overflow: hidden; /* 넘치면 잘라서 2페이지 방지 */
+        overflow: hidden;
       }}
       .empty {{
         background: #ffffff;
@@ -406,7 +426,7 @@ def _build_weekday_poster_html(
         box-shadow: none;
       }}
 
-      /* ✅ 변경/배달불요 칸 색상 분리 */
+      /* 변경/배달불요 칸 색상 분리 */
       .has-change {{
         border-color: rgba(184, 134, 11, 0.55);
         background: rgba(255, 250, 235, 0.96);
@@ -434,11 +454,7 @@ def _build_weekday_poster_html(
         font-size: 16px;
         letter-spacing: -0.3px;
       }}
-      .dow {{
-        font-size: 12.5px;
-        font-weight: 900;
-        opacity: 0.72;
-      }}
+      .dow {{ font-size: 12.5px; font-weight: 900; opacity: 0.72; }}
       .badge-nodelivery {{
         font-size: 12px;
         font-weight: 1000;
@@ -457,7 +473,6 @@ def _build_weekday_poster_html(
         word-break: keep-all;
       }}
       .base {{ font-weight: 1000; }}
-
       .change {{
         margin-top: 10px;
         font-weight: 1000;
@@ -531,9 +546,7 @@ def _build_weekday_poster_html(
           <div class="header">
             <div class="box brand">
               {moms_logo_html}
-              <div class="brand-text">
-                <div class="moms">MOMS</div>
-              </div>
+              <div class="brand-text"><div class="moms">MOMS</div></div>
             </div>
 
             <div class="title">
@@ -558,16 +571,16 @@ def _build_weekday_poster_html(
 
 
 # -----------------------------
-# 시작 시 M 로고 추출(있으면)
+# 시작 시 로고 자동 추출 시도
 # -----------------------------
-_ensure_extracted_logo()
+_ensure_extracted_moms_logo()
 
 
 # -----------------------------
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("날짜 선택을 ‘월~금 달력 버튼’으로 개선했습니다. (협회 로고는 data/association_logo.png 자동 사용)")
+st.caption("날짜 선택을 평일 달력 버튼으로 개선했고, 협회 로고는 루트/데이터 어디에 있어도 자동 인식합니다.")
 
 colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
@@ -603,18 +616,14 @@ with colL:
     y = st.selectbox("연도", list(range(today.year - 2, today.year + 4)), index=2)
     m = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
 
-    # 선택 날짜 초기값(세션)
     if "selected_date" not in st.session_state:
         st.session_state["selected_date"] = date(y, m, 1)
 
-    # 월 변경 시 selected_date를 그 달 1일로 보정
     sd: date = st.session_state["selected_date"]
     if sd.year != y or sd.month != m:
         st.session_state["selected_date"] = date(y, m, 1)
 
-    # ✅ 달력 버튼으로 날짜 선택
-    selected = _weekday_calendar_picker(y, m, st.session_state["selected_date"])
-    dsel = selected
+    dsel = _weekday_calendar_picker(y, m, st.session_state["selected_date"])
     key = dsel.isoformat()
 
     st.divider()
@@ -674,12 +683,11 @@ with colR:
     st.subheader("4) 포스터(출력용 1장) 미리보기")
 
     right_label = st.text_input("우측 상단 표기", value="동약협회")
-
     title_top = f"맘스락 {m:02d}월"
     title_bottom = "식단 변경"
 
     moms_logo_uri = _data_uri(EXTRACTED_LOGO_PATH)
-    assoc_logo_uri = _data_uri(ASSOC_LOGO_PATH)
+    assoc_logo_uri = _data_uri(_find_assoc_logo())
 
     poster_html = _build_weekday_poster_html(
         y=y,
@@ -704,4 +712,5 @@ with colR:
         mime="text/html",
         use_container_width=True,
     )
+
     st.info("PDF 저장: HTML 열기 → Ctrl+P → PDF로 저장(가로/여백 최소). 1페이지 고정(넘치면 칸 안에서 잘립니다).")
