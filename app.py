@@ -28,10 +28,14 @@ CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
+# ✅ (자동) 맘스락 포스터 사진에서 좌측 M 로고 추출(있으면)
 POSTER_SOURCE_PATH = DATA_DIR / "moms_poster_source.jpg"
 EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
 
-WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]
+# ✅ (수동) 협회 로고 파일: data/association_logo.png 로 넣어두면 자동 표시
+ASSOC_LOGO_PATH = DATA_DIR / "association_logo.png"
+
+WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]  # 평일만
 WEEKDAY_FULL = ["월", "화", "수", "목", "금", "토", "일"]
 
 
@@ -50,16 +54,12 @@ def _safe_str(x) -> str:
 
 
 def _safe_filename(s: str) -> str:
-    """
-    파일명에 쓰기 어려운 문자를 '_'로 치환.
-    (Windows/Streamlit Cloud 모두 안정)
-    """
     s = _safe_str(s)
     if not s:
         return "식단표"
     s = re.sub(r'[\\/:*?"<>|\n\r\t]+', "_", s)
     s = re.sub(r"\s+", "_", s).strip("_")
-    return s[:120]  # 너무 길면 잘라냄
+    return s[:120]
 
 
 # -----------------------------
@@ -139,7 +139,7 @@ def _data_uri(path: Path) -> str | None:
 
 
 # -----------------------------
-# 로고 자동 추출
+# ✅ 포스터 사진에서 M 로고 자동 추출(있으면)
 # -----------------------------
 def _ensure_extracted_logo() -> None:
     if EXTRACTED_LOGO_PATH.exists():
@@ -228,7 +228,7 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 
 
 # -----------------------------
-# 평일(월~금) 포스터 HTML (1페이지 강제)
+# 평일(월~금) 포스터 HTML (1페이지 고정)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -236,7 +236,8 @@ def _build_weekday_poster_html(
     title_top: str,
     title_bottom: str,
     right_label: str,
-    logo_uri: str | None,
+    moms_logo_uri: str | None,
+    assoc_logo_uri: str | None,
 ) -> str:
     data_map = _get_day_record_map(y, m)
 
@@ -250,13 +251,18 @@ def _build_weekday_poster_html(
         rows5.append(wd)
 
     row_count = len(rows5)
-    # ✅ 1페이지 강제: 5행이면 더 타이트
-    cell_h = 122 if row_count <= 4 else 104
+    cell_h = 122 if row_count <= 4 else 104  # 5행이면 더 타이트
 
-    if logo_uri:
-        logo_html = f'<img src="{logo_uri}" class="logo-img" alt="logo"/>'
+    # 좌측 MOMS 로고(없으면 대체)
+    if moms_logo_uri:
+        moms_logo_html = f'<img src="{moms_logo_uri}" class="moms-logo-img" alt="MOMS logo"/>'
     else:
-        logo_html = '<div class="logo-fallback"><div class="mf">M</div></div>'
+        moms_logo_html = '<div class="moms-logo-fallback">M</div>'
+
+    # 우측 협회 로고(없으면 텍스트만)
+    assoc_html = ""
+    if assoc_logo_uri:
+        assoc_html = f'<img src="{assoc_logo_uri}" class="assoc-logo-img" alt="협회 로고"/>'
 
     css = f"""
     <style>
@@ -268,10 +274,10 @@ def _build_weekday_poster_html(
         background: #ffffff;
       }}
 
-      /* ✅ PDF 1페이지 강제 */
+      /* PDF 1페이지 고정 */
       .sheet {{ height: 100%; overflow: hidden; }}
 
-      /* ✅ 인쇄 선명도 */
+      /* 인쇄 색 유지 */
       @media print {{
         * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
         table, tr, td, th {{ page-break-inside: avoid !important; break-inside: avoid !important; }}
@@ -281,7 +287,7 @@ def _build_weekday_poster_html(
 
       .header {{
         display:grid;
-        grid-template-columns: 200px 1fr 200px;
+        grid-template-columns: 220px 1fr 240px;
         gap: 10px;
         align-items: center;
         margin-bottom: 8px;
@@ -300,36 +306,54 @@ def _build_weekday_poster_html(
         box-sizing: border-box;
       }}
 
-      .brand {{ gap: 10px; }}
-      .logo-img {{ height: 70px; width: auto; object-fit: contain; }}
-      .logo-fallback {{
+      /* 좌측: M 로고 + MOMS (Style 삭제) */
+      .brand {{ justify-content: center; gap: 12px; }}
+      .moms-logo-img {{ height: 70px; width: auto; object-fit: contain; }}
+      .moms-logo-fallback {{
         height: 70px; width: 70px;
-        border-radius: 20px;
-        background: linear-gradient(180deg, rgba(255,120,160,0.55), rgba(255,180,90,0.55));
-        border: 2px solid rgba(15,23,42,0.22);
+        border-radius: 18px;
         display:flex; align-items:center; justify-content:center;
+        font-weight: 1000; font-size: 46px;
+        border: 2px solid rgba(15,23,42,0.22);
+        background: rgba(0,0,0,0.02);
       }}
-      .logo-fallback .mf {{ font-size: 52px; font-weight: 1000; color: rgba(15,23,42,0.86); line-height: 1; }}
-
       .brand-text {{ line-height: 1.0; font-weight: 1000; letter-spacing: -0.3px; }}
       .brand-text .moms {{ font-size: 30px; }}
-      .brand-text .style {{ font-size: 13px; font-weight: 900; opacity: 0.70; margin-top: 6px; }}
 
+      /* 중앙 제목(2줄) */
       .title {{ text-align: center; line-height: 1.0; }}
       .title .t1 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 0; }}
       .title .t2 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 6px 0 0 0; }}
 
-      .rightbox .label {{ font-size: 30px; font-weight: 1000; letter-spacing: -0.3px; }}
+      /* 우측: 협회 로고 + 동약협회 */
+      .rightbox {{
+        justify-content: center;
+        gap: 12px;
+      }}
+      .assoc-logo-img {{
+        height: 62px;
+        width: 62px;
+        object-fit: contain;
+      }}
+      .rightbox .label {{
+        font-size: 30px;
+        font-weight: 1000;
+        letter-spacing: -0.3px;
+      }}
 
+      /* 달력 */
       table {{
         border-collapse: separate;
         border-spacing: 10px 10px;
         width: 100%;
         table-layout: fixed;
       }}
-      thead {{ display: table-header-group; }}
-      th {{ font-size: 15px; font-weight: 1000; text-align:center; padding: 0; }}
-
+      th {{
+        font-size: 15px;
+        font-weight: 1000;
+        text-align:center;
+        padding: 0;
+      }}
       td {{
         height: {cell_h}px;
         vertical-align: top;
@@ -339,7 +363,7 @@ def _build_weekday_poster_html(
         box-shadow: 0 7px 12px rgba(15,23,42,0.06);
         padding: 10px 12px;
         box-sizing: border-box;
-        overflow: hidden; /* ✅ 넘치면 잘라서 2페이지 방지 */
+        overflow: hidden; /* 넘치면 잘라서 2페이지 방지 */
       }}
       .empty {{
         background: #ffffff;
@@ -347,9 +371,22 @@ def _build_weekday_poster_html(
         box-shadow: none;
       }}
 
-      .has-change {{ border-color: rgba(196,0,0,0.52); background: rgba(255, 246, 246, 0.92); }}
-      .no-delivery {{ border-color: rgba(176,0,32,0.44); background: rgba(255, 240, 244, 0.92); }}
-      .both {{ border-color: rgba(125, 60, 152, 0.52); background: rgba(248, 244, 255, 0.92); }}
+      /* ✅ 3) 색상 서로 다르게 */
+      /* 변경메뉴 있음: 옅은 노랑 계열 */
+      .has-change {{
+        border-color: rgba(184, 134, 11, 0.55);
+        background: rgba(255, 250, 235, 0.96);
+      }}
+      /* 배달불요: 옅은 분홍/붉은 계열 */
+      .no-delivery {{
+        border-color: rgba(176,0,32,0.46);
+        background: rgba(255, 240, 244, 0.96);
+      }}
+      /* 둘 다: 옅은 보라 계열 */
+      .both {{
+        border-color: rgba(125, 60, 152, 0.56);
+        background: rgba(248, 244, 255, 0.96);
+      }}
 
       .cell-top {{
         display:flex;
@@ -357,9 +394,19 @@ def _build_weekday_poster_html(
         align-items: center;
         margin-bottom: 8px;
       }}
-      .datechip {{ display:inline-flex; align-items:baseline; gap: 8px; font-weight: 1000; font-size: 16px; letter-spacing: -0.3px; }}
-      .dow {{ font-size: 12.5px; font-weight: 900; opacity: 0.72; }}
-
+      .datechip {{
+        display:inline-flex;
+        align-items:baseline;
+        gap: 8px;
+        font-weight: 1000;
+        font-size: 16px;
+        letter-spacing: -0.3px;
+      }}
+      .dow {{
+        font-size: 12.5px;
+        font-weight: 900;
+        opacity: 0.72;
+      }}
       .badge-nodelivery {{
         font-size: 12px;
         font-weight: 1000;
@@ -371,10 +418,19 @@ def _build_weekday_poster_html(
         letter-spacing: -0.2px;
       }}
 
-      .menu {{ font-size: 16px; line-height: 1.18; letter-spacing: -0.35px; word-break: keep-all; }}
+      .menu {{
+        font-size: 16px;
+        line-height: 1.18;
+        letter-spacing: -0.35px;
+        word-break: keep-all;
+      }}
       .base {{ font-weight: 1000; }}
 
-      .change {{ margin-top: 10px; font-weight: 1000; color: #c40000; }}
+      .change {{
+        margin-top: 10px;
+        font-weight: 1000;
+        color: #c40000;
+      }}
       .change .label {{
         display:inline-block;
         font-size: 12px;
@@ -442,10 +498,9 @@ def _build_weekday_poster_html(
         <div class="sheet">
           <div class="header">
             <div class="box brand">
-              {logo_html}
+              {moms_logo_html}
               <div class="brand-text">
                 <div class="moms">MOMS</div>
-                <div class="style">Style</div>
               </div>
             </div>
 
@@ -455,6 +510,7 @@ def _build_weekday_poster_html(
             </div>
 
             <div class="box rightbox">
+              {assoc_html}
               <div class="label">{html.escape(right_label)}</div>
             </div>
           </div>
@@ -479,7 +535,7 @@ _ensure_extracted_logo()
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("HTML 파일명=제목과 동일 / PDF 1페이지 고정(넘치면 잘라서 2페이지 방지)")
+st.caption("좌측 MOMS에서 Style 삭제 / 우측 동약협회에 협회 로고 삽입 / 변경·배달불요 칸 색상 분리 / PDF 1페이지 고정")
 
 colL, colR = st.columns([1.05, 1.0], vertical_alignment="top")
 
@@ -576,11 +632,11 @@ with colR:
 
     right_label = st.text_input("우측 상단 표기", value="동약협회")
 
-    # 제목 2줄 고정
     title_top = f"맘스락 {m:02d}월"
     title_bottom = "식단 변경"
 
-    logo_uri = _data_uri(EXTRACTED_LOGO_PATH)
+    moms_logo_uri = _data_uri(EXTRACTED_LOGO_PATH)  # 자동 추출된 M 로고
+    assoc_logo_uri = _data_uri(ASSOC_LOGO_PATH)     # data/association_logo.png
 
     poster_html = _build_weekday_poster_html(
         y=y,
@@ -588,7 +644,8 @@ with colR:
         title_top=title_top,
         title_bottom=title_bottom,
         right_label=_safe_str(right_label) or "동약협회",
-        logo_uri=logo_uri,
+        moms_logo_uri=moms_logo_uri,
+        assoc_logo_uri=assoc_logo_uri,
     )
 
     components.html(poster_html, height=780, scrolling=True)
@@ -596,9 +653,7 @@ with colR:
     st.divider()
     st.subheader("4) 업체 전달용 파일 만들기")
 
-    # ✅ 파일명 = 제목과 동일(안전 문자로 변환)
     dl_name = _safe_filename(f"{title_top}_{title_bottom}_{right_label}") + ".html"
-
     st.download_button(
         label=f"⬇️ HTML 다운로드 ({dl_name})",
         data=poster_html.encode("utf-8"),
@@ -607,4 +662,4 @@ with colR:
         use_container_width=True,
     )
 
-    st.info("PDF 저장 시: Ctrl+P → PDF로 저장 (가로 / 여백 최소)  ※ 이 버전은 1페이지를 넘지 않도록 강하게 고정되어 있습니다.")
+    st.info("PDF 저장: HTML 열기 → Ctrl+P → PDF로 저장(가로/여백 최소). 1페이지를 넘지 않도록 고정되어 있습니다.")
