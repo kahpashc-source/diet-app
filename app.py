@@ -29,7 +29,7 @@ BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
 CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
-MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
+MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name (또는 menu 호환)
 
 # ✅ GitHub에 있는 파일명 기준(루트에 올려둔 상태 지원)
 ASSOC_LOGO_ROOT = APP_DIR / "association_logo.png"
@@ -38,7 +38,6 @@ ASSOC_LOGO_DATA = DATA_DIR / "association_logo.png"
 # ✅ MOMS 로고(정식 로고 파일을 최우선으로 사용)
 MOMS_LOGO_ROOT = APP_DIR / "moms_logo.png"
 MOMS_LOGO_DATA = DATA_DIR / "moms_logo.png"
-# - (선택) 로고+MOMS 텍스트가 합쳐진 완성형 배너 이미지가 있으면 최우선
 MOMS_BRAND_ROOT = APP_DIR / "moms_brand.png"
 MOMS_BRAND_DATA = DATA_DIR / "moms_brand.png"
 
@@ -112,6 +111,7 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     except Exception:
         df = pd.read_csv(path, dtype=str, encoding="utf-8")
 
+    # 컬럼명 정리(BOM/공백 제거)
     df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
 
     for c in columns:
@@ -162,29 +162,20 @@ def _find_assoc_logo() -> Path | None:
 
 
 def _find_moms_logo() -> tuple[str | None, bool]:
-    """
-    반환: (data_uri, is_brand_image)
-    - moms_brand.png가 있으면 (uri, True)
-    - moms_logo.png가 있으면 (uri, False)
-    - 둘 다 없으면 추출로고(있으면) (uri, False)
-    """
     brand = _first_exists(MOMS_BRAND_ROOT, MOMS_BRAND_DATA)
     if brand:
         return _data_uri(brand), True
-
     logo = _first_exists(MOMS_LOGO_ROOT, MOMS_LOGO_DATA)
     if logo:
         return _data_uri(logo), False
-
     extracted = _first_exists(EXTRACTED_LOGO_PATH)
     if extracted:
         return _data_uri(extracted), False
-
     return None, False
 
 
 # -----------------------------
-# 메뉴 인덱스 (BOM/컬럼명 깨짐 자동 복구 + 저장 직전 백업)
+# 메뉴 인덱스 (name/menu 헤더 자동 호환 + 백업)
 # -----------------------------
 def _backup_file_if_exists(path: Path, label: str) -> None:
     try:
@@ -198,6 +189,7 @@ def _backup_file_if_exists(path: Path, label: str) -> None:
 
 
 def _read_menu_index() -> list[str]:
+    # ✅ 기존 파일이 menu 헤더를 썼던 경우도 호환
     _ensure_csv(MENU_INDEX_PATH, ["name"])
     try:
         df = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8-sig")
@@ -206,6 +198,11 @@ def _read_menu_index() -> list[str]:
 
     df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
 
+    # 1) name이 없고 menu가 있으면 name으로 간주
+    if "name" not in df.columns and "menu" in df.columns:
+        df = df.rename(columns={"menu": "name"})
+
+    # 2) 그래도 없으면 컬럼 1개짜리를 name으로 간주
     if "name" not in df.columns:
         if len(df.columns) == 1:
             df = df.rename(columns={df.columns[0]: "name"})
@@ -216,7 +213,7 @@ def _read_menu_index() -> list[str]:
     items = [x for x in items if x]
 
     seen = set()
-    out = []
+    out: list[str] = []
     for x in items:
         if x not in seen:
             out.append(x)
@@ -237,14 +234,11 @@ def _ensure_extracted_logo_if_needed() -> None:
     logo = _first_exists(MOMS_LOGO_ROOT, MOMS_LOGO_DATA)
     if brand or logo:
         return
-
     if EXTRACTED_LOGO_PATH.exists():
         return
-
     src = _first_exists(POSTER_SRC_ROOT, POSTER_SRC_DATA)
     if src is None:
         return
-
     try:
         from PIL import Image, ImageOps
 
@@ -364,13 +358,17 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
 
 
 # -----------------------------
-# 포스터 HTML (1페이지 고정 / 색상 분리 / 로고 / 제목 2줄 / 연락처 1줄 / 코너 체크표시)
+# 포스터 HTML
+# - 제목 2줄(1줄: 맘스락 02월 식단 변경 / 2줄: (인원:1인)) 중앙 정렬
+# - 연락처 1줄 고정
+# - 변경/배달불요 코너 표시(시인성)
+# - 협회 로고 선명도 힌트(원본 해상도가 가장 중요)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
     m: int,
-    title_top: str,        # 예: "맘스락 02월 식단 변경"
-    title_bottom: str,     # 예: "(인원:1인)"
+    title_top: str,
+    title_bottom: str,
     right_label: str,
     moms_uri: str | None,
     moms_is_brand: bool,
@@ -391,7 +389,6 @@ def _build_weekday_poster_html(
     row_count = len(rows5)
     cell_h = 122 if row_count <= 4 else 104
 
-    # 좌측 MOMS
     if moms_uri and moms_is_brand:
         moms_box_html = f'<img src="{moms_uri}" class="moms-brand-banner" alt="MOMS"/>'
     else:
@@ -429,7 +426,6 @@ def _build_weekday_poster_html(
         margin-bottom: 8px;
       }}
 
-      /* 좌측 MOMS */
       .brand-box {{
         height: 98px;
         border-radius: 20px;
@@ -470,7 +466,6 @@ def _build_weekday_poster_html(
         background: #fff;
       }}
 
-      /* ✅ 제목: 2줄, (인원:1인)은 "위줄의 중간 위치(=가로 중앙)"에 오도록 중앙정렬 */
       .title {{ text-align: center; line-height: 1.02; }}
       .title .t1 {{ font-size: 36px; font-weight: 1000; letter-spacing: -1.0px; margin: 0; }}
       .title .t2 {{
@@ -478,10 +473,9 @@ def _build_weekday_poster_html(
         font-weight: 1000;
         letter-spacing: -0.6px;
         margin: 6px 0 0 0;
-        text-align: center;      /* ✅ 가로 중앙 */
+        text-align: center;
       }}
 
-      /* 우측 박스 */
       .right-box {{
         height: 98px;
         border-radius: 20px;
@@ -495,8 +489,6 @@ def _build_weekday_poster_html(
         padding: 12px 14px;
         box-sizing: border-box;
       }}
-
-      /* ✅ 로고 선명도 개선용: 과도한 확대를 피하고, 렌더링 힌트 추가 */
       .assoc-logo-img {{
         height: 66px;
         width: auto;
@@ -505,7 +497,6 @@ def _build_weekday_poster_html(
         image-rendering: crisp-edges;
         transform: translateZ(0);
       }}
-
       .right-box .label {{ font-size: 28px; font-weight: 1000; letter-spacing: -0.3px; text-align:center; }}
       .contact {{
         margin-top: 6px;
@@ -513,7 +504,7 @@ def _build_weekday_poster_html(
         font-weight: 900;
         opacity: 0.90;
         text-align: center;
-        white-space: nowrap;      /* ✅ 2줄 방지 */
+        white-space: nowrap;
         word-break: keep-all;
       }}
 
@@ -534,7 +525,7 @@ def _build_weekday_poster_html(
         padding: 10px 12px;
         box-sizing: border-box;
         overflow: hidden;
-        position: relative; /* ✅ 코너 마크용 */
+        position: relative;
       }}
       .empty {{ background: #ffffff; border: 2.4px dashed rgba(15,23,42,0.22); box-shadow: none; }}
 
@@ -542,7 +533,6 @@ def _build_weekday_poster_html(
       .no-delivery {{ border-color: rgba(176,0,32,0.46); background: rgba(255, 240, 244, 0.96); }}
       .both {{ border-color: rgba(125, 60, 152, 0.56); background: rgba(248, 244, 255, 0.96); }}
 
-      /* ✅ 우측 상단 코너 표시 */
       .corner {{
         position: absolute;
         top: 6px;
@@ -687,6 +677,26 @@ _ensure_extracted_logo_if_needed()
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
+st.caption(f"저장 경로: {DATA_DIR}")
+
+# 사이드바에 파일 상태 표시(실수 방지)
+with st.sidebar:
+    st.markdown("### 💾 저장 상태 점검")
+    st.code(f"DATA_DIR: {DATA_DIR}")
+
+    def _file_status(p: Path) -> str:
+        try:
+            if not p.exists():
+                return "없음"
+            return f"{p.stat().st_size} bytes / {pd.to_datetime(p.stat().st_mtime, unit='s')}"
+        except Exception:
+            return "확인불가"
+
+    st.write("menu_index.csv:", _file_status(MENU_INDEX_PATH))
+    st.write("base_menu.csv:", _file_status(BASE_MENU_PATH))
+    st.write("change_menu.csv:", _file_status(CHANGE_MENU_PATH))
+    st.write("delivery.csv:", _file_status(DELIVERY_PATH))
+    st.write("backups 폴더:", str(BACKUP_DIR))
 
 colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
@@ -704,6 +714,7 @@ with colL:
                     idx_items.append(x)
                     _write_menu_index(idx_items)
                 st.success("저장 완료")
+                st.rerun()
             else:
                 st.warning("메뉴명을 입력해 주세요.")
 
@@ -714,6 +725,7 @@ with colL:
                 idx_items = [x for x in idx_items if x != del_item]
                 _write_menu_index(idx_items)
                 st.success("삭제 완료")
+                st.rerun()
 
     st.caption(f"🧰 메뉴 인덱스 자동 백업 폴더: {BACKUP_DIR}")
 
@@ -758,12 +770,18 @@ with colL:
     b1, b2 = st.columns([1, 1])
     with b1:
         if st.button("💾 기본메뉴 저장", use_container_width=True):
-            _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel, "base_menu", _safe_str(base_text))
-            st.success("기본메뉴 저장 완료")
+            v = _safe_str(base_text)
+            if not v:
+                st.warning("기본메뉴가 비어 있습니다.")
+            else:
+                _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel, "base_menu", v)
+                st.success("기본메뉴 저장 완료")
+                st.rerun()
     with b2:
         if st.button("🧹 기본메뉴 삭제(해당일)", use_container_width=True):
             _delete_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel)
             st.success("기본메뉴 삭제 완료")
+            st.rerun()
 
     st.markdown("**변경메뉴(있으면 입력)**")
     change_pick = st.selectbox("변경메뉴(인덱스)", ["(없음)"] + idx_items, index=0)
@@ -774,18 +792,25 @@ with colL:
     c3, c4 = st.columns([1, 1])
     with c3:
         if st.button("💾 변경메뉴 저장", use_container_width=True):
-            _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", _safe_str(change_text))
-            st.success("변경메뉴 저장 완료")
+            v = _safe_str(change_text)
+            if not v or v == "(없음)":
+                st.warning("변경메뉴가 비어 있습니다. (없음)으로 두려면 삭제를 사용하세요.")
+            else:
+                _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", v)
+                st.success("변경메뉴 저장 완료")
+                st.rerun()
     with c4:
         if st.button("🧹 변경메뉴 삭제(해당일)", use_container_width=True):
             _delete_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel)
             st.success("변경메뉴 삭제 완료")
+            st.rerun()
 
     st.markdown("**배달 여부**")
     deliv_choice = st.radio("배달", ["배달(Y)", "배달불요(N)"], index=0 if cur_deliv == "Y" else 1, horizontal=True)
     if st.button("💾 배달여부 저장", use_container_width=True):
         _upsert_by_date(DELIVERY_PATH, ["date", "delivery"], dsel, "delivery", "Y" if deliv_choice.startswith("배달(Y)") else "N")
         st.success("배달여부 저장 완료")
+        st.rerun()
 
 with colR:
     st.subheader("4) 포스터(출력용 1장) 미리보기")
@@ -794,12 +819,8 @@ with colR:
     headcount = st.number_input("인원수", min_value=1, max_value=999, value=1, step=1)
     contact = st.text_input("연락처", value="010-7101-5871")
 
-    # ✅ 요청: 2줄 제목
-    # 1줄: 맘스락 02월 식단 변경
-    # 2줄: (인원:1인)  -> 중앙 배치
     title_top = f"맘스락 {m:02d}월 식단 변경"
     title_bottom = f"(인원:{int(headcount)}인)"
-
     contact_text = f"연락처: {contact}"
 
     moms_uri, moms_is_brand = _find_moms_logo()
