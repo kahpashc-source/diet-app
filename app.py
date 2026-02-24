@@ -36,6 +36,7 @@ ASSOC_LOGO_ROOT = APP_DIR / "association_logo.png"
 ASSOC_LOGO_DATA = DATA_DIR / "association_logo.png"
 
 # ✅ MOMS 로고(정식 로고 파일을 최우선으로 사용)
+# - 루트 또는 data 폴더에 moms_logo.png 를 두면 자동 사용
 MOMS_LOGO_ROOT = APP_DIR / "moms_logo.png"
 MOMS_LOGO_DATA = DATA_DIR / "moms_logo.png"
 # - (선택) 로고+MOMS 텍스트가 합쳐진 완성형 배너 이미지가 있으면 최우선
@@ -98,7 +99,7 @@ def _ensure_csv(path: Path, columns: list[str]) -> None:
     if not path.exists():
         _atomic_write_csv(pd.DataFrame(columns=columns), path)
         return
-    # 0바이트면 헤더만 복구(덮어쓰기지만 "빈 파일" 자체를 정상 CSV로)
+    # 0바이트면 헤더만 복구
     try:
         if path.stat().st_size == 0:
             _atomic_write_csv(pd.DataFrame(columns=columns), path)
@@ -108,13 +109,12 @@ def _ensure_csv(path: Path, columns: list[str]) -> None:
 
 def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     _ensure_csv(path, columns)
-    # utf-8-sig 우선, 실패 시 utf-8
     try:
         df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
     except Exception:
         df = pd.read_csv(path, dtype=str, encoding="utf-8")
 
-    # 컬럼명 정리(공백/제어문자/BOM 제거)
+    # 컬럼명 정리(BOM/공백 제거)
     df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
 
     for c in columns:
@@ -187,18 +187,8 @@ def _find_moms_logo() -> tuple[str | None, bool]:
 
 
 # -----------------------------
-# 메뉴 인덱스 (BOM/컬럼명 깨짐 자동 복구 + 백업)
+# 메뉴 인덱스 (BOM/컬럼명 깨짐 자동 복구 + 저장 직전 백업)
 # -----------------------------
-def _normalize_columns(cols: list[str]) -> list[str]:
-    out = []
-    for c in cols:
-        c2 = _safe_str(c)
-        c2 = re.sub(r"^\ufeff", "", c2)  # BOM
-        c2 = c2.strip()
-        out.append(c2)
-    return out
-
-
 def _backup_file_if_exists(path: Path, label: str) -> None:
     try:
         if not path.exists() or path.stat().st_size == 0:
@@ -217,10 +207,10 @@ def _read_menu_index() -> list[str]:
     except Exception:
         df = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8")
 
-    df.columns = _normalize_columns(list(df.columns))
+    # 컬럼명 정리(BOM 제거 + 공백 제거)
+    df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
 
-    # ✅ 컬럼명이 깨졌을 때 자동 복구:
-    # - "name"이 없고 컬럼이 1개면 그 컬럼을 name으로 간주
+    # name 컬럼이 없으면 1개짜리 컬럼을 name으로 간주
     if "name" not in df.columns:
         if len(df.columns) == 1:
             df = df.rename(columns={df.columns[0]: "name"})
@@ -230,7 +220,6 @@ def _read_menu_index() -> list[str]:
     items = [_safe_str(x) for x in df["name"].fillna("").tolist()]
     items = [x for x in items if x]
 
-    # 중복 제거(순서 유지)
     seen = set()
     out = []
     for x in items:
@@ -241,10 +230,8 @@ def _read_menu_index() -> list[str]:
 
 
 def _write_menu_index(items: list[str]) -> None:
-    # 저장 직전 자동 백업(혹시 덮어써도 복구 가능)
     _backup_file_if_exists(MENU_INDEX_PATH, "menu_index_backup")
-    df = pd.DataFrame({"name": items})
-    _atomic_write_csv(df, MENU_INDEX_PATH)
+    _atomic_write_csv(pd.DataFrame({"name": items}), MENU_INDEX_PATH)
 
 
 # -----------------------------
@@ -255,7 +242,7 @@ def _ensure_extracted_logo_if_needed() -> None:
     brand = _first_exists(MOMS_BRAND_ROOT, MOMS_BRAND_DATA)
     logo = _first_exists(MOMS_LOGO_ROOT, MOMS_LOGO_DATA)
     if brand or logo:
-        return
+        return  # 정식 로고가 있으면 추출 안 함
 
     if EXTRACTED_LOGO_PATH.exists():
         return
@@ -383,7 +370,7 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
 
 
 # -----------------------------
-# 포스터 HTML (1페이지 고정 / 색상 분리 / 로고)
+# 포스터 HTML (1페이지 고정 / 색상 분리 / 로고 / 인원수 / 연락처)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -394,6 +381,8 @@ def _build_weekday_poster_html(
     moms_uri: str | None,
     moms_is_brand: bool,
     assoc_uri: str | None,
+    headcount_text: str,
+    contact_text: str,
 ) -> str:
     data_map = _get_day_record_map(y, m)
 
@@ -441,12 +430,13 @@ def _build_weekday_poster_html(
 
       .header {{
         display:grid;
-        grid-template-columns: 220px 1fr 240px;
+        grid-template-columns: 220px 1fr 260px;
         gap: 10px;
         align-items: center;
         margin-bottom: 8px;
       }}
 
+      /* ✅ 좌측 MOMS: 이전 느낌 */
       .brand-box {{
         height: 98px;
         border-radius: 20px;
@@ -501,11 +491,26 @@ def _build_weekday_poster_html(
         align-items:center;
         justify-content:center;
         gap: 12px;
-        padding: 14px 16px;
+        padding: 12px 14px;
         box-sizing: border-box;
       }}
       .assoc-logo-img {{ height: 60px; width: 60px; object-fit: contain; }}
-      .right-box .label {{ font-size: 30px; font-weight: 1000; letter-spacing: -0.3px; }}
+      .right-box .label {{ font-size: 28px; font-weight: 1000; letter-spacing: -0.3px; text-align:center; }}
+
+      .headcount {{
+        margin-top: 6px;
+        font-size: 16px;
+        font-weight: 900;
+        opacity: 0.85;
+        text-align: center;
+      }}
+      .contact {{
+        margin-top: 2px;
+        font-size: 15px;
+        font-weight: 900;
+        opacity: 0.85;
+        text-align: center;
+      }}
 
       table {{
         border-collapse: separate;
@@ -599,18 +604,6 @@ def _build_weekday_poster_html(
             """)
         body_rows.append("<tr>" + "".join(tds) + "</tr>")
 
-    # 좌측 MOMS 박스 html 구성(위에서 만든 moms_box_html 사용)
-    if moms_uri and moms_is_brand:
-        moms_box_html = f'<img src="{moms_uri}" class="moms-brand-banner" alt="MOMS"/>'
-    else:
-        logo_html = f'<img src="{moms_uri}" class="moms-logo-img" alt="M"/>' if moms_uri else '<div class="moms-logo-fallback">M</div>'
-        moms_box_html = f"""
-        <div class="brand-box">
-          {logo_html}
-          <div class="brand-text"><div class="moms">MOMS</div></div>
-        </div>
-        """
-
     return f"""
     <!doctype html>
     <html lang="ko">
@@ -627,7 +620,11 @@ def _build_weekday_poster_html(
 
             <div class="right-box">
               {assoc_html}
-              <div class="label">{html.escape(right_label)}</div>
+              <div>
+                <div class="label">{html.escape(right_label)}</div>
+                <div class="headcount">{html.escape(headcount_text)}</div>
+                <div class="contact">{html.escape(contact_text)}</div>
+              </div>
             </div>
           </div>
 
@@ -680,7 +677,6 @@ with colL:
                 _write_menu_index(idx_items)
                 st.success("삭제 완료")
 
-    # 보너스: 백업폴더 위치 안내(복구 편의)
     st.caption(f"🧰 메뉴 인덱스 자동 백업 폴더: {BACKUP_DIR}")
 
     st.divider()
@@ -757,6 +753,12 @@ with colR:
     st.subheader("4) 포스터(출력용 1장) 미리보기")
 
     right_label = st.text_input("우측 상단 표기", value="동약협회")
+    headcount = st.number_input("인원수", min_value=1, max_value=999, value=1, step=1)
+    contact = st.text_input("연락처", value="010-7101-5871")
+
+    headcount_text = f"인원수: {int(headcount)}명"
+    contact_text = f"연락처: {contact}"
+
     title_top = f"맘스락 {m:02d}월"
     title_bottom = "식단 변경"
 
@@ -772,6 +774,8 @@ with colR:
         moms_uri=moms_uri,
         moms_is_brand=moms_is_brand,
         assoc_uri=assoc_uri,
+        headcount_text=headcount_text,
+        contact_text=contact_text,
     )
 
     components.html(poster_html, height=780, scrolling=True)
