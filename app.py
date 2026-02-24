@@ -31,17 +31,14 @@ CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name (또는 menu 호환)
 
-# ✅ GitHub에 있는 파일명 기준(루트에 올려둔 상태 지원)
 ASSOC_LOGO_ROOT = APP_DIR / "association_logo.png"
 ASSOC_LOGO_DATA = DATA_DIR / "association_logo.png"
 
-# ✅ MOMS 로고(정식 로고 파일을 최우선으로 사용)
 MOMS_LOGO_ROOT = APP_DIR / "moms_logo.png"
 MOMS_LOGO_DATA = DATA_DIR / "moms_logo.png"
 MOMS_BRAND_ROOT = APP_DIR / "moms_brand.png"
 MOMS_BRAND_DATA = DATA_DIR / "moms_brand.png"
 
-# (선택) 포스터 사진에서 자동 추출 로고 (정식 로고 없을 때만 사용)
 POSTER_SRC_ROOT = APP_DIR / "datamoms_poster_source.jpg"
 POSTER_SRC_DATA = DATA_DIR / "moms_poster_source.jpg"
 EXTRACTED_LOGO_PATH = DATA_DIR / "moms_logo_extracted.png"
@@ -111,7 +108,6 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     except Exception:
         df = pd.read_csv(path, dtype=str, encoding="utf-8")
 
-    # 컬럼명 정리(BOM/공백 제거)
     df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
 
     for c in columns:
@@ -175,7 +171,7 @@ def _find_moms_logo() -> tuple[str | None, bool]:
 
 
 # -----------------------------
-# 메뉴 인덱스 (name/menu 헤더 자동 호환 + 백업)
+# 메뉴 인덱스 (name/menu 호환 + 백업)
 # -----------------------------
 def _backup_file_if_exists(path: Path, label: str) -> None:
     try:
@@ -189,7 +185,6 @@ def _backup_file_if_exists(path: Path, label: str) -> None:
 
 
 def _read_menu_index() -> list[str]:
-    # ✅ 기존 파일이 menu 헤더를 썼던 경우도 호환
     _ensure_csv(MENU_INDEX_PATH, ["name"])
     try:
         df = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8-sig")
@@ -198,11 +193,9 @@ def _read_menu_index() -> list[str]:
 
     df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
 
-    # 1) name이 없고 menu가 있으면 name으로 간주
     if "name" not in df.columns and "menu" in df.columns:
         df = df.rename(columns={"menu": "name"})
 
-    # 2) 그래도 없으면 컬럼 1개짜리를 name으로 간주
     if "name" not in df.columns:
         if len(df.columns) == 1:
             df = df.rename(columns={df.columns[0]: "name"})
@@ -358,17 +351,14 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
 
 
 # -----------------------------
-# 포스터 HTML
-# - 제목 2줄(1줄: 맘스락 02월 식단 변경 / 2줄: (인원:1인)) 중앙 정렬
-# - 연락처 1줄 고정
-# - 변경/배달불요 코너 표시(시인성)
-# - 협회 로고 선명도 힌트(원본 해상도가 가장 중요)
+# 포스터 HTML (제목 3줄 + 색상 강조)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
     m: int,
-    title_top: str,
-    title_bottom: str,
+    title1: str,          # "맘스락 02월"
+    title2: str,          # "식단(배달) 변경"
+    title3: str,          # "(인원:1인)"  -> 작은 글씨
     right_label: str,
     moms_uri: str | None,
     moms_is_brand: bool,
@@ -466,14 +456,37 @@ def _build_weekday_poster_html(
         background: #fff;
       }}
 
-      .title {{ text-align: center; line-height: 1.02; }}
-      .title .t1 {{ font-size: 36px; font-weight: 1000; letter-spacing: -1.0px; margin: 0; }}
-      .title .t2 {{
-        font-size: 22px;
+      /* ✅ 제목: 3줄 + 이쁜 색(그라데이션 텍스트) */
+      .title {{
+        text-align: center;
+        line-height: 1.03;
+      }}
+      .title .t1 {{
+        font-size: 34px;
         font-weight: 1000;
+        letter-spacing: -1.0px;
+        margin: 0;
+        background: linear-gradient(90deg, #0ea5e9, #22c55e);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }}
+      .title .t2 {{
+        font-size: 34px;
+        font-weight: 1000;
+        letter-spacing: -1.0px;
+        margin: 6px 0 0 0;
+        background: linear-gradient(90deg, #8b5cf6, #ec4899);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }}
+      .title .t3 {{
+        font-size: 20px;         /* ✅ (인원:1인) 작은 글씨 */
+        font-weight: 900;
         letter-spacing: -0.6px;
         margin: 6px 0 0 0;
-        text-align: center;
+        color: rgba(15,23,42,0.70);
       }}
 
       .right-box {{
@@ -644,8 +657,9 @@ def _build_weekday_poster_html(
             <div>{moms_box_html}</div>
 
             <div class="title">
-              <p class="t1">{html.escape(title_top)}</p>
-              <p class="t2">{html.escape(title_bottom)}</p>
+              <p class="t1">{html.escape(title1)}</p>
+              <p class="t2">{html.escape(title2)}</p>
+              <p class="t3">{html.escape(title3)}</p>
             </div>
 
             <div class="right-box">
@@ -679,24 +693,9 @@ _ensure_extracted_logo_if_needed()
 st.title("🍱 맘스락 식단 변경 프로그램")
 st.caption(f"저장 경로: {DATA_DIR}")
 
-# 사이드바에 파일 상태 표시(실수 방지)
 with st.sidebar:
     st.markdown("### 💾 저장 상태 점검")
     st.code(f"DATA_DIR: {DATA_DIR}")
-
-    def _file_status(p: Path) -> str:
-        try:
-            if not p.exists():
-                return "없음"
-            return f"{p.stat().st_size} bytes / {pd.to_datetime(p.stat().st_mtime, unit='s')}"
-        except Exception:
-            return "확인불가"
-
-    st.write("menu_index.csv:", _file_status(MENU_INDEX_PATH))
-    st.write("base_menu.csv:", _file_status(BASE_MENU_PATH))
-    st.write("change_menu.csv:", _file_status(CHANGE_MENU_PATH))
-    st.write("delivery.csv:", _file_status(DELIVERY_PATH))
-    st.write("backups 폴더:", str(BACKUP_DIR))
 
 colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
@@ -819,8 +818,9 @@ with colR:
     headcount = st.number_input("인원수", min_value=1, max_value=999, value=1, step=1)
     contact = st.text_input("연락처", value="010-7101-5871")
 
-    title_top = f"맘스락 {m:02d}월 식단 변경"
-    title_bottom = f"(인원:{int(headcount)}인)"
+    title1 = f"맘스락 {m:02d}월"
+    title2 = "식단(배달) 변경"
+    title3 = f"(인원:{int(headcount)}인)"
     contact_text = f"연락처: {contact}"
 
     moms_uri, moms_is_brand = _find_moms_logo()
@@ -829,8 +829,9 @@ with colR:
     poster_html = _build_weekday_poster_html(
         y=y,
         m=m,
-        title_top=title_top,
-        title_bottom=title_bottom,
+        title1=title1,
+        title2=title2,
+        title3=title3,
         right_label=_safe_str(right_label) or "동약협회",
         moms_uri=moms_uri,
         moms_is_brand=moms_is_brand,
@@ -843,7 +844,7 @@ with colR:
     st.divider()
     st.subheader("5) 업체 전달용 파일 만들기")
 
-    dl_name = _safe_filename(f"{title_top}_{title_bottom}_{right_label}") + ".html"
+    dl_name = _safe_filename(f"{title1}_{title2}_{title3}_{right_label}") + ".html"
     st.download_button(
         label=f"⬇️ HTML 다운로드 ({dl_name})",
         data=poster_html.encode("utf-8"),
