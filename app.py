@@ -36,7 +36,6 @@ ASSOC_LOGO_ROOT = APP_DIR / "association_logo.png"
 ASSOC_LOGO_DATA = DATA_DIR / "association_logo.png"
 
 # ✅ MOMS 로고(정식 로고 파일을 최우선으로 사용)
-# - 루트 또는 data 폴더에 moms_logo.png 를 두면 자동 사용
 MOMS_LOGO_ROOT = APP_DIR / "moms_logo.png"
 MOMS_LOGO_DATA = DATA_DIR / "moms_logo.png"
 # - (선택) 로고+MOMS 텍스트가 합쳐진 완성형 배너 이미지가 있으면 최우선
@@ -99,7 +98,6 @@ def _ensure_csv(path: Path, columns: list[str]) -> None:
     if not path.exists():
         _atomic_write_csv(pd.DataFrame(columns=columns), path)
         return
-    # 0바이트면 헤더만 복구
     try:
         if path.stat().st_size == 0:
             _atomic_write_csv(pd.DataFrame(columns=columns), path)
@@ -114,7 +112,6 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     except Exception:
         df = pd.read_csv(path, dtype=str, encoding="utf-8")
 
-    # 컬럼명 정리(BOM/공백 제거)
     df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
 
     for c in columns:
@@ -207,10 +204,8 @@ def _read_menu_index() -> list[str]:
     except Exception:
         df = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8")
 
-    # 컬럼명 정리(BOM 제거 + 공백 제거)
     df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
 
-    # name 컬럼이 없으면 1개짜리 컬럼을 name으로 간주
     if "name" not in df.columns:
         if len(df.columns) == 1:
             df = df.rename(columns={df.columns[0]: "name"})
@@ -236,13 +231,12 @@ def _write_menu_index(items: list[str]) -> None:
 
 # -----------------------------
 # (선택) 포스터 사진에서 M 로고 자동 추출
-# - ✅ 정식 moms_logo.png / moms_brand.png 가 없을 때만 생성
 # -----------------------------
 def _ensure_extracted_logo_if_needed() -> None:
     brand = _first_exists(MOMS_BRAND_ROOT, MOMS_BRAND_DATA)
     logo = _first_exists(MOMS_LOGO_ROOT, MOMS_LOGO_DATA)
     if brand or logo:
-        return  # 정식 로고가 있으면 추출 안 함
+        return
 
     if EXTRACTED_LOGO_PATH.exists():
         return
@@ -370,7 +364,7 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
 
 
 # -----------------------------
-# 포스터 HTML (1페이지 고정 / 색상 분리 / 로고 / 인원수 / 연락처)
+# 포스터 HTML (1페이지 고정 / 색상 분리 / 로고 / 제목에 인원수 / 연락처 1줄 / 코너 체크표시)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -381,7 +375,6 @@ def _build_weekday_poster_html(
     moms_uri: str | None,
     moms_is_brand: bool,
     assoc_uri: str | None,
-    headcount_text: str,
     contact_text: str,
 ) -> str:
     data_map = _get_day_record_map(y, m)
@@ -398,7 +391,7 @@ def _build_weekday_poster_html(
     row_count = len(rows5)
     cell_h = 122 if row_count <= 4 else 104
 
-    # 좌측 MOMS 박스: "이전처럼" 보이도록
+    # 좌측 MOMS
     if moms_uri and moms_is_brand:
         moms_box_html = f'<img src="{moms_uri}" class="moms-brand-banner" alt="MOMS"/>'
     else:
@@ -430,13 +423,13 @@ def _build_weekday_poster_html(
 
       .header {{
         display:grid;
-        grid-template-columns: 220px 1fr 260px;
+        grid-template-columns: 220px 1fr 300px;
         gap: 10px;
         align-items: center;
         margin-bottom: 8px;
       }}
 
-      /* ✅ 좌측 MOMS: 이전 느낌 */
+      /* 좌측 MOMS */
       .brand-box {{
         height: 98px;
         border-radius: 20px;
@@ -477,10 +470,12 @@ def _build_weekday_poster_html(
         background: #fff;
       }}
 
+      /* 제목 */
       .title {{ text-align: center; line-height: 1.0; }}
-      .title .t1 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 0; }}
-      .title .t2 {{ font-size: 38px; font-weight: 1000; letter-spacing: -1.0px; margin: 6px 0 0 0; }}
+      .title .t1 {{ font-size: 36px; font-weight: 1000; letter-spacing: -1.0px; margin: 0; }}
+      .title .t2 {{ font-size: 34px; font-weight: 1000; letter-spacing: -1.0px; margin: 6px 0 0 0; }}
 
+      /* 우측 박스 */
       .right-box {{
         height: 98px;
         border-radius: 20px;
@@ -490,26 +485,20 @@ def _build_weekday_poster_html(
         display:flex;
         align-items:center;
         justify-content:center;
-        gap: 12px;
+        gap: 10px;
         padding: 12px 14px;
         box-sizing: border-box;
       }}
       .assoc-logo-img {{ height: 60px; width: 60px; object-fit: contain; }}
       .right-box .label {{ font-size: 28px; font-weight: 1000; letter-spacing: -0.3px; text-align:center; }}
-
-      .headcount {{
-        margin-top: 6px;
-        font-size: 16px;
-        font-weight: 900;
-        opacity: 0.85;
-        text-align: center;
-      }}
       .contact {{
-        margin-top: 2px;
+        margin-top: 6px;
         font-size: 15px;
         font-weight: 900;
-        opacity: 0.85;
+        opacity: 0.88;
         text-align: center;
+        white-space: nowrap;      /* ✅ 2줄 방지 */
+        word-break: keep-all;
       }}
 
       table {{
@@ -529,6 +518,7 @@ def _build_weekday_poster_html(
         padding: 10px 12px;
         box-sizing: border-box;
         overflow: hidden;
+        position: relative; /* ✅ 코너 마크용 */
       }}
       .empty {{ background: #ffffff; border: 2.4px dashed rgba(15,23,42,0.22); box-shadow: none; }}
 
@@ -536,7 +526,36 @@ def _build_weekday_poster_html(
       .no-delivery {{ border-color: rgba(176,0,32,0.46); background: rgba(255, 240, 244, 0.96); }}
       .both {{ border-color: rgba(125, 60, 152, 0.56); background: rgba(248, 244, 255, 0.96); }}
 
-      .cell-top {{ display:flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
+      /* ✅ 우측 상단 코너 체크표시(시인성 강화) */
+      .corner {{
+        position: absolute;
+        top: 6px;
+        right: 8px;
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        font-weight: 1000;
+        border: 1px solid rgba(15,23,42,0.25);
+        box-shadow: 0 2px 4px rgba(15,23,42,0.10);
+      }}
+      .corner-change {{
+        background: rgba(255, 230, 180, 0.95);
+        color: rgba(120, 70, 0, 1.0);
+      }}
+      .corner-nodelivery {{
+        background: rgba(255, 200, 210, 0.95);
+        color: rgba(140, 0, 20, 1.0);
+      }}
+      .corner-both {{
+        background: rgba(220, 210, 255, 0.95);
+        color: rgba(70, 35, 120, 1.0);
+      }}
+
+      .cell-top {{ display:flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-right: 28px; }}
       .datechip {{ display:inline-flex; align-items:baseline; gap: 8px; font-weight: 1000; font-size: 16px; letter-spacing: -0.3px; }}
       .dow {{ font-size: 12.5px; font-weight: 900; opacity: 0.72; }}
       .badge-nodelivery {{
@@ -581,12 +600,16 @@ def _build_weekday_poster_html(
             has_change = bool(change)
 
             cls = ""
+            corner = ""
             if has_change and is_nodelivery:
                 cls = "both"
+                corner = '<div class="corner corner-both">✔</div>'
             elif has_change:
                 cls = "has-change"
+                corner = '<div class="corner corner-change">✔</div>'
             elif is_nodelivery:
                 cls = "no-delivery"
+                corner = '<div class="corner corner-nodelivery">✖</div>'
 
             badge = '<span class="badge-nodelivery">배달불요</span>' if is_nodelivery else ""
             base_line = f'<div class="menu base">{base}</div>' if base else '<div class="menu base">&nbsp;</div>'
@@ -594,6 +617,7 @@ def _build_weekday_poster_html(
 
             tds.append(f"""
             <td class="{cls}">
+              {corner}
               <div class="cell-top">
                 <div class="datechip">{day:02d}<span class="dow">({dow})</span></div>
                 {badge}
@@ -603,6 +627,9 @@ def _build_weekday_poster_html(
             </td>
             """)
         body_rows.append("<tr>" + "".join(tds) + "</tr>")
+
+    # title_bottom이 비어있으면 2줄째를 숨김(기존 폼의 단일 제목 느낌)
+    t2_html = f'<p class="t2">{html.escape(title_bottom)}</p>' if _safe_str(title_bottom) else ""
 
     return f"""
     <!doctype html>
@@ -615,14 +642,13 @@ def _build_weekday_poster_html(
 
             <div class="title">
               <p class="t1">{html.escape(title_top)}</p>
-              <p class="t2">{html.escape(title_bottom)}</p>
+              {t2_html}
             </div>
 
             <div class="right-box">
               {assoc_html}
               <div>
                 <div class="label">{html.escape(right_label)}</div>
-                <div class="headcount">{html.escape(headcount_text)}</div>
                 <div class="contact">{html.escape(contact_text)}</div>
               </div>
             </div>
@@ -648,7 +674,7 @@ _ensure_extracted_logo_if_needed()
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("✅ MOMS 로고는 moms_logo.png(또는 moms_brand.png)를 최우선 사용합니다. (추출 로고는 정식 로고 없을 때만)")
+st.caption("✅ 기존 수기 폼 통일성을 위해: 제목에 인원수 표기 / 연락처 1줄 고정 / 변경·배달불요 코너 체크 표시를 적용합니다.")
 
 colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
@@ -756,11 +782,10 @@ with colR:
     headcount = st.number_input("인원수", min_value=1, max_value=999, value=1, step=1)
     contact = st.text_input("연락처", value="010-7101-5871")
 
-    headcount_text = f"인원수: {int(headcount)}명"
+    # ✅ 제목에 인원수 포함(요청 형식)
+    title_top = f"맘스락 {m:02d}월 식단 변경(인원:{int(headcount)}인)"
+    title_bottom = ""  # 2줄 제목이 필요하면 여기만 바꾸면 됨(예: "식단 변경")
     contact_text = f"연락처: {contact}"
-
-    title_top = f"맘스락 {m:02d}월"
-    title_bottom = "식단 변경"
 
     moms_uri, moms_is_brand = _find_moms_logo()
     assoc_uri = _data_uri(_find_assoc_logo())
@@ -774,7 +799,6 @@ with colR:
         moms_uri=moms_uri,
         moms_is_brand=moms_is_brand,
         assoc_uri=assoc_uri,
-        headcount_text=headcount_text,
         contact_text=contact_text,
     )
 
@@ -783,7 +807,7 @@ with colR:
     st.divider()
     st.subheader("5) 업체 전달용 파일 만들기")
 
-    dl_name = _safe_filename(f"{title_top}_{title_bottom}_{right_label}") + ".html"
+    dl_name = _safe_filename(f"{title_top}_{right_label}") + ".html"
     st.download_button(
         label=f"⬇️ HTML 다운로드 ({dl_name})",
         data=poster_html.encode("utf-8"),
