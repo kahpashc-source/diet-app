@@ -9,6 +9,7 @@ import calendar
 import base64
 import html
 import re
+import unicodedata
 
 import pandas as pd
 import streamlit as st
@@ -78,6 +79,38 @@ def _first_exists(*paths: Path) -> Path | None:
         except Exception:
             pass
     return None
+
+
+# -----------------------------
+# 가나다 정렬 키
+# -----------------------------
+def _ko_sort_key(s: str) -> tuple:
+    """
+    Windows/로케일 영향 없이 '가나다' 기준에 가깝게 정렬하기 위한 키.
+    - 한글: NFKD 분해 + 소문자
+    - 기타: 소문자
+    """
+    x = _safe_str(s)
+    if not x:
+        return ("", "")
+    x_norm = unicodedata.normalize("NFKD", x).casefold()
+    return (x_norm, x.casefold())
+
+
+def _unique_sorted(items: list[str]) -> list[str]:
+    # 중복 제거(대소문자/공백 차이는 그대로 두되, 동일 문자열만 제거)
+    seen = set()
+    out = []
+    for it in items:
+        t = _safe_str(it)
+        if not t:
+            continue
+        if t not in seen:
+            out.append(t)
+            seen.add(t)
+    # 가나다(가까운) 정렬
+    out.sort(key=_ko_sort_key)
+    return out
 
 
 # -----------------------------
@@ -171,7 +204,7 @@ def _find_moms_logo() -> tuple[str | None, bool]:
 
 
 # -----------------------------
-# 메뉴 인덱스 (name/menu 호환 + 백업)
+# 메뉴 인덱스 (name/menu 호환 + 백업 + 자동 가나다정렬)
 # -----------------------------
 def _backup_file_if_exists(path: Path, label: str) -> None:
     try:
@@ -203,18 +236,27 @@ def _read_menu_index() -> list[str]:
             return []
 
     items = [_safe_str(x) for x in df["name"].fillna("").tolist()]
-    items = [x for x in items if x]
+    items = _unique_sorted(items)
 
-    seen = set()
-    out: list[str] = []
-    for x in items:
-        if x not in seen:
-            out.append(x)
-            seen.add(x)
-    return out
+    # ✅ 파일 자체도 정렬 상태로 유지(한 번만 자동 정리)
+    # - 저장이 잦은 편이라, 정렬 결과가 현재 파일과 다를 때만 저장
+    try:
+        current = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8-sig")
+        current.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in current.columns]
+        if "name" not in current.columns and "menu" in current.columns:
+            current = current.rename(columns={"menu": "name"})
+        current_items = [_safe_str(x) for x in current.get("name", pd.Series([], dtype=str)).fillna("").tolist()]
+        current_items = [x for x in current_items if x]
+        if current_items != items:
+            _write_menu_index(items)
+    except Exception:
+        pass
+
+    return items
 
 
 def _write_menu_index(items: list[str]) -> None:
+    items = _unique_sorted(items)
     _backup_file_if_exists(MENU_INDEX_PATH, "menu_index_backup")
     _atomic_write_csv(pd.DataFrame({"name": items}), MENU_INDEX_PATH)
 
@@ -356,9 +398,9 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
 def _build_weekday_poster_html(
     y: int,
     m: int,
-    title1: str,          # "맘스락 02월"
-    title2: str,          # "식단(배달) 변경"
-    title3: str,          # "(인원:1인)"  -> 작은 글씨
+    title1: str,
+    title2: str,
+    title3: str,
     right_label: str,
     moms_uri: str | None,
     moms_is_brand: bool,
@@ -456,7 +498,6 @@ def _build_weekday_poster_html(
         background: #fff;
       }}
 
-      /* ✅ 제목: 3줄 + 이쁜 색(그라데이션 텍스트) */
       .title {{
         text-align: center;
         line-height: 1.03;
@@ -482,7 +523,7 @@ def _build_weekday_poster_html(
         color: transparent;
       }}
       .title .t3 {{
-        font-size: 20px;         /* ✅ (인원:1인) 작은 글씨 */
+        font-size: 20px;
         font-weight: 900;
         letter-spacing: -0.6px;
         margin: 6px 0 0 0;
@@ -693,14 +734,10 @@ _ensure_extracted_logo_if_needed()
 st.title("🍱 맘스락 식단 변경 프로그램")
 st.caption(f"저장 경로: {DATA_DIR}")
 
-with st.sidebar:
-    st.markdown("### 💾 저장 상태 점검")
-    st.code(f"DATA_DIR: {DATA_DIR}")
-
 colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
 with colL:
-    st.subheader("1) 메뉴 인덱스 관리")
+    st.subheader("1) 메뉴 인덱스 관리 (가나다 순 자동 정렬)")
     idx_items = _read_menu_index()
 
     c1, c2 = st.columns([1, 1])
@@ -709,10 +746,9 @@ with colL:
         if st.button("➕ 인덱스에 추가", use_container_width=True):
             x = _safe_str(new_item)
             if x:
-                if x not in idx_items:
-                    idx_items.append(x)
-                    _write_menu_index(idx_items)
-                st.success("저장 완료")
+                idx_items.append(x)
+                _write_menu_index(idx_items)  # ✅ 저장 시 자동 가나다 정렬
+                st.success("저장 완료(가나다 정렬)")
                 st.rerun()
             else:
                 st.warning("메뉴명을 입력해 주세요.")
@@ -722,7 +758,7 @@ with colL:
         if st.button("🗑️ 선택 메뉴 삭제", use_container_width=True):
             if del_item != "(선택)":
                 idx_items = [x for x in idx_items if x != del_item]
-                _write_menu_index(idx_items)
+                _write_menu_index(idx_items)  # ✅ 저장 시 자동 가나다 정렬
                 st.success("삭제 완료")
                 st.rerun()
 
