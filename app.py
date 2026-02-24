@@ -364,13 +364,13 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
 
 
 # -----------------------------
-# 포스터 HTML (1페이지 고정 / 색상 분리 / 로고 / 제목에 인원수 / 연락처 1줄 / 코너 체크표시)
+# 포스터 HTML (1페이지 고정 / 색상 분리 / 로고 / 제목 2줄 / 연락처 1줄 / 코너 체크표시)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
     m: int,
-    title_top: str,
-    title_bottom: str,
+    title_top: str,        # 예: "맘스락 02월 식단 변경"
+    title_bottom: str,     # 예: "(인원:1인)"
     right_label: str,
     moms_uri: str | None,
     moms_is_brand: bool,
@@ -423,7 +423,7 @@ def _build_weekday_poster_html(
 
       .header {{
         display:grid;
-        grid-template-columns: 220px 1fr 300px;
+        grid-template-columns: 220px 1fr 320px;
         gap: 10px;
         align-items: center;
         margin-bottom: 8px;
@@ -470,10 +470,16 @@ def _build_weekday_poster_html(
         background: #fff;
       }}
 
-      /* 제목 */
-      .title {{ text-align: center; line-height: 1.0; }}
+      /* ✅ 제목: 2줄, (인원:1인)은 "위줄의 중간 위치(=가로 중앙)"에 오도록 중앙정렬 */
+      .title {{ text-align: center; line-height: 1.02; }}
       .title .t1 {{ font-size: 36px; font-weight: 1000; letter-spacing: -1.0px; margin: 0; }}
-      .title .t2 {{ font-size: 34px; font-weight: 1000; letter-spacing: -1.0px; margin: 6px 0 0 0; }}
+      .title .t2 {{
+        font-size: 22px;
+        font-weight: 1000;
+        letter-spacing: -0.6px;
+        margin: 6px 0 0 0;
+        text-align: center;      /* ✅ 가로 중앙 */
+      }}
 
       /* 우측 박스 */
       .right-box {{
@@ -489,13 +495,23 @@ def _build_weekday_poster_html(
         padding: 12px 14px;
         box-sizing: border-box;
       }}
-      .assoc-logo-img {{ height: 60px; width: 60px; object-fit: contain; }}
+
+      /* ✅ 로고 선명도 개선용: 과도한 확대를 피하고, 렌더링 힌트 추가 */
+      .assoc-logo-img {{
+        height: 66px;
+        width: auto;
+        object-fit: contain;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: crisp-edges;
+        transform: translateZ(0);
+      }}
+
       .right-box .label {{ font-size: 28px; font-weight: 1000; letter-spacing: -0.3px; text-align:center; }}
       .contact {{
         margin-top: 6px;
         font-size: 15px;
         font-weight: 900;
-        opacity: 0.88;
+        opacity: 0.90;
         text-align: center;
         white-space: nowrap;      /* ✅ 2줄 방지 */
         word-break: keep-all;
@@ -526,7 +542,7 @@ def _build_weekday_poster_html(
       .no-delivery {{ border-color: rgba(176,0,32,0.46); background: rgba(255, 240, 244, 0.96); }}
       .both {{ border-color: rgba(125, 60, 152, 0.56); background: rgba(248, 244, 255, 0.96); }}
 
-      /* ✅ 우측 상단 코너 체크표시(시인성 강화) */
+      /* ✅ 우측 상단 코너 표시 */
       .corner {{
         position: absolute;
         top: 6px;
@@ -628,9 +644,6 @@ def _build_weekday_poster_html(
             """)
         body_rows.append("<tr>" + "".join(tds) + "</tr>")
 
-    # title_bottom이 비어있으면 2줄째를 숨김(기존 폼의 단일 제목 느낌)
-    t2_html = f'<p class="t2">{html.escape(title_bottom)}</p>' if _safe_str(title_bottom) else ""
-
     return f"""
     <!doctype html>
     <html lang="ko">
@@ -642,7 +655,7 @@ def _build_weekday_poster_html(
 
             <div class="title">
               <p class="t1">{html.escape(title_top)}</p>
-              {t2_html}
+              <p class="t2">{html.escape(title_bottom)}</p>
             </div>
 
             <div class="right-box">
@@ -674,7 +687,6 @@ _ensure_extracted_logo_if_needed()
 # UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
-st.caption("✅ 기존 수기 폼 통일성을 위해: 제목에 인원수 표기 / 연락처 1줄 고정 / 변경·배달불요 코너 체크 표시를 적용합니다.")
 
 colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
@@ -782,9 +794,12 @@ with colR:
     headcount = st.number_input("인원수", min_value=1, max_value=999, value=1, step=1)
     contact = st.text_input("연락처", value="010-7101-5871")
 
-    # ✅ 제목에 인원수 포함(요청 형식)
-    title_top = f"맘스락 {m:02d}월 식단 변경(인원:{int(headcount)}인)"
-    title_bottom = ""  # 2줄 제목이 필요하면 여기만 바꾸면 됨(예: "식단 변경")
+    # ✅ 요청: 2줄 제목
+    # 1줄: 맘스락 02월 식단 변경
+    # 2줄: (인원:1인)  -> 중앙 배치
+    title_top = f"맘스락 {m:02d}월 식단 변경"
+    title_bottom = f"(인원:{int(headcount)}인)"
+
     contact_text = f"연락처: {contact}"
 
     moms_uri, moms_is_brand = _find_moms_logo()
@@ -807,7 +822,7 @@ with colR:
     st.divider()
     st.subheader("5) 업체 전달용 파일 만들기")
 
-    dl_name = _safe_filename(f"{title_top}_{right_label}") + ".html"
+    dl_name = _safe_filename(f"{title_top}_{title_bottom}_{right_label}") + ".html"
     st.download_button(
         label=f"⬇️ HTML 다운로드 ({dl_name})",
         data=poster_html.encode("utf-8"),
