@@ -23,6 +23,9 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
 BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
 CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
@@ -33,7 +36,6 @@ ASSOC_LOGO_ROOT = APP_DIR / "association_logo.png"
 ASSOC_LOGO_DATA = DATA_DIR / "association_logo.png"
 
 # ✅ MOMS 로고(정식 로고 파일을 최우선으로 사용)
-# - 루트 또는 data 폴더에 moms_logo.png 를 두면 자동 사용
 MOMS_LOGO_ROOT = APP_DIR / "moms_logo.png"
 MOMS_LOGO_DATA = DATA_DIR / "moms_logo.png"
 # - (선택) 로고+MOMS 텍스트가 합쳐진 완성형 배너 이미지가 있으면 최우선
@@ -83,6 +85,70 @@ def _first_exists(*paths: Path) -> Path | None:
 
 
 # -----------------------------
+# 원자적 CSV 저장 + 안전 읽기
+# -----------------------------
+def _atomic_write_csv(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df.to_csv(tmp, index=False, encoding="utf-8-sig")
+    tmp.replace(path)
+
+
+def _ensure_csv(path: Path, columns: list[str]) -> None:
+    if not path.exists():
+        _atomic_write_csv(pd.DataFrame(columns=columns), path)
+        return
+    # 0바이트면 헤더만 복구(덮어쓰기지만 "빈 파일" 자체를 정상 CSV로)
+    try:
+        if path.stat().st_size == 0:
+            _atomic_write_csv(pd.DataFrame(columns=columns), path)
+    except Exception:
+        pass
+
+
+def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
+    _ensure_csv(path, columns)
+    # utf-8-sig 우선, 실패 시 utf-8
+    try:
+        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        df = pd.read_csv(path, dtype=str, encoding="utf-8")
+
+    # 컬럼명 정리(공백/제어문자/BOM 제거)
+    df.columns = [re.sub(r"^\ufeff", "", _safe_str(c)).strip() for c in df.columns]
+
+    for c in columns:
+        if c not in df.columns:
+            df[c] = ""
+    df = df[columns].copy()
+
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date.astype(str)
+        df = df[df["date"].ne("NaT")]
+    return df
+
+
+def _upsert_by_date(path: Path, columns: list[str], d: date, value_col: str, value: str) -> None:
+    df = _read_csv(path, columns)
+    key = d.isoformat()
+    if (df["date"] == key).any():
+        df.loc[df["date"] == key, value_col] = value
+    else:
+        row = {c: "" for c in columns}
+        row["date"] = key
+        row[value_col] = value
+        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    _atomic_write_csv(df, path)
+
+
+def _delete_by_date(path: Path, columns: list[str], d: date) -> None:
+    df = _read_csv(path, columns)
+    key = d.isoformat()
+    df = df[df["date"] != key].copy()
+    _atomic_write_csv(df, path)
+
+
+# -----------------------------
 # 이미지(Data URI)
 # -----------------------------
 def _data_uri(path: Path | None) -> str | None:
@@ -121,56 +187,50 @@ def _find_moms_logo() -> tuple[str | None, bool]:
 
 
 # -----------------------------
-# CSV 유틸
+# 메뉴 인덱스 (BOM/컬럼명 깨짐 자동 복구 + 백업)
 # -----------------------------
-def _ensure_csv(path: Path, columns: list[str]) -> None:
-    if not path.exists():
-        pd.DataFrame(columns=columns).to_csv(path, index=False, encoding="utf-8-sig")
+def _normalize_columns(cols: list[str]) -> list[str]:
+    out = []
+    for c in cols:
+        c2 = _safe_str(c)
+        c2 = re.sub(r"^\ufeff", "", c2)  # BOM
+        c2 = c2.strip()
+        out.append(c2)
+    return out
 
 
-def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
-    _ensure_csv(path, columns)
-    df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
-    for c in columns:
-        if c not in df.columns:
-            df[c] = ""
-    df = df[columns].copy()
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date.astype(str)
-        df = df[df["date"].ne("NaT")]
-    return df
+def _backup_file_if_exists(path: Path, label: str) -> None:
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return
+        stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+        backup = BACKUP_DIR / f"{label}_{stamp}{path.suffix}"
+        backup.write_bytes(path.read_bytes())
+    except Exception:
+        pass
 
 
-def _upsert_by_date(path: Path, columns: list[str], d: date, value_col: str, value: str) -> None:
-    df = _read_csv(path, columns)
-    key = d.isoformat()
-    if (df["date"] == key).any():
-        df.loc[df["date"] == key, value_col] = value
-    else:
-        row = {c: "" for c in columns}
-        row["date"] = key
-        row[value_col] = value
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    df.to_csv(path, index=False, encoding="utf-8-sig")
-
-
-def _delete_by_date(path: Path, columns: list[str], d: date) -> None:
-    df = _read_csv(path, columns)
-    key = d.isoformat()
-    df = df[df["date"] != key].copy()
-    df.to_csv(path, index=False, encoding="utf-8-sig")
-
-
-# -----------------------------
-# 메뉴 인덱스
-# -----------------------------
 def _read_menu_index() -> list[str]:
     _ensure_csv(MENU_INDEX_PATH, ["name"])
-    df = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8-sig")
+    try:
+        df = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        df = pd.read_csv(MENU_INDEX_PATH, dtype=str, encoding="utf-8")
+
+    df.columns = _normalize_columns(list(df.columns))
+
+    # ✅ 컬럼명이 깨졌을 때 자동 복구:
+    # - "name"이 없고 컬럼이 1개면 그 컬럼을 name으로 간주
     if "name" not in df.columns:
-        return []
+        if len(df.columns) == 1:
+            df = df.rename(columns={df.columns[0]: "name"})
+        else:
+            return []
+
     items = [_safe_str(x) for x in df["name"].fillna("").tolist()]
     items = [x for x in items if x]
+
+    # 중복 제거(순서 유지)
     seen = set()
     out = []
     for x in items:
@@ -181,7 +241,10 @@ def _read_menu_index() -> list[str]:
 
 
 def _write_menu_index(items: list[str]) -> None:
-    pd.DataFrame({"name": items}).to_csv(MENU_INDEX_PATH, index=False, encoding="utf-8-sig")
+    # 저장 직전 자동 백업(혹시 덮어써도 복구 가능)
+    _backup_file_if_exists(MENU_INDEX_PATH, "menu_index_backup")
+    df = pd.DataFrame({"name": items})
+    _atomic_write_csv(df, MENU_INDEX_PATH)
 
 
 # -----------------------------
@@ -192,7 +255,7 @@ def _ensure_extracted_logo_if_needed() -> None:
     brand = _first_exists(MOMS_BRAND_ROOT, MOMS_BRAND_DATA)
     logo = _first_exists(MOMS_LOGO_ROOT, MOMS_LOGO_DATA)
     if brand or logo:
-        return  # 정식 로고가 있으면 추출 안 함
+        return
 
     if EXTRACTED_LOGO_PATH.exists():
         return
@@ -348,7 +411,6 @@ def _build_weekday_poster_html(
 
     # 좌측 MOMS 박스: "이전처럼" 보이도록
     if moms_uri and moms_is_brand:
-        # moms_brand.png는 로고+MOMS가 이미 포함된 이미지라 그대로 배치
         moms_box_html = f'<img src="{moms_uri}" class="moms-brand-banner" alt="MOMS"/>'
     else:
         logo_html = f'<img src="{moms_uri}" class="moms-logo-img" alt="M"/>' if moms_uri else '<div class="moms-logo-fallback">M</div>'
@@ -385,7 +447,6 @@ def _build_weekday_poster_html(
         margin-bottom: 8px;
       }}
 
-      /* ✅ 좌측 MOMS: 이전 느낌 */
       .brand-box {{
         height: 98px;
         border-radius: 20px;
@@ -538,6 +599,18 @@ def _build_weekday_poster_html(
             """)
         body_rows.append("<tr>" + "".join(tds) + "</tr>")
 
+    # 좌측 MOMS 박스 html 구성(위에서 만든 moms_box_html 사용)
+    if moms_uri and moms_is_brand:
+        moms_box_html = f'<img src="{moms_uri}" class="moms-brand-banner" alt="MOMS"/>'
+    else:
+        logo_html = f'<img src="{moms_uri}" class="moms-logo-img" alt="M"/>' if moms_uri else '<div class="moms-logo-fallback">M</div>'
+        moms_box_html = f"""
+        <div class="brand-box">
+          {logo_html}
+          <div class="brand-text"><div class="moms">MOMS</div></div>
+        </div>
+        """
+
     return f"""
     <!doctype html>
     <html lang="ko">
@@ -606,6 +679,9 @@ with colL:
                 idx_items = [x for x in idx_items if x != del_item]
                 _write_menu_index(idx_items)
                 st.success("삭제 완료")
+
+    # 보너스: 백업폴더 위치 안내(복구 편의)
+    st.caption(f"🧰 메뉴 인덱스 자동 백업 폴더: {BACKUP_DIR}")
 
     st.divider()
     st.subheader("2) 월 선택")
