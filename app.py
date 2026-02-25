@@ -10,10 +10,9 @@ import base64
 import html
 import re
 import unicodedata
-import zipfile
 import io
+import zipfile
 import shutil
-from typing import Tuple
 
 import pandas as pd
 import streamlit as st
@@ -52,11 +51,12 @@ WEEKDAY_KR_WD = ["월", "화", "수", "목", "금"]
 WEEKDAY_FULL = ["월", "화", "수", "목", "금", "토", "일"]
 
 ALL_DATA_FILES = [
-    ("menu_index", MENU_INDEX_PATH),
-    ("base_menu", BASE_MENU_PATH),
-    ("change_menu", CHANGE_MENU_PATH),
-    ("delivery", DELIVERY_PATH),
+    ("menu_index.csv", MENU_INDEX_PATH),
+    ("base_menu.csv", BASE_MENU_PATH),
+    ("change_menu.csv", CHANGE_MENU_PATH),
+    ("delivery.csv", DELIVERY_PATH),
 ]
+
 
 # -----------------------------
 # 안전 문자열 처리
@@ -71,6 +71,7 @@ def _safe_str(x) -> str:
         pass
     return str(x).strip()
 
+
 def _safe_filename(s: str) -> str:
     s = _safe_str(s)
     if not s:
@@ -78,6 +79,7 @@ def _safe_filename(s: str) -> str:
     s = re.sub(r'[\\/:*?"<>|\n\r\t]+', "_", s)
     s = re.sub(r"\s+", "_", s).strip("_")
     return s[:120]
+
 
 def _first_exists(*paths: Path) -> Path | None:
     for p in paths:
@@ -88,6 +90,7 @@ def _first_exists(*paths: Path) -> Path | None:
             pass
     return None
 
+
 # -----------------------------
 # 가나다 정렬 키
 # -----------------------------
@@ -97,6 +100,7 @@ def _ko_sort_key(s: str) -> tuple:
         return ("", "")
     x_norm = unicodedata.normalize("NFKD", x).casefold()
     return (x_norm, x.casefold())
+
 
 def _unique_sorted(items: list[str]) -> list[str]:
     seen = set()
@@ -111,6 +115,7 @@ def _unique_sorted(items: list[str]) -> list[str]:
     out.sort(key=_ko_sort_key)
     return out
 
+
 # -----------------------------
 # 원자적 CSV 저장 + 안전 읽기
 # -----------------------------
@@ -119,6 +124,7 @@ def _atomic_write_csv(df: pd.DataFrame, path: Path) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     df.to_csv(tmp, index=False, encoding="utf-8-sig")
     tmp.replace(path)
+
 
 def _ensure_csv(path: Path, columns: list[str]) -> None:
     if not path.exists():
@@ -129,6 +135,7 @@ def _ensure_csv(path: Path, columns: list[str]) -> None:
             _atomic_write_csv(pd.DataFrame(columns=columns), path)
     except Exception:
         pass
+
 
 def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     _ensure_csv(path, columns)
@@ -149,124 +156,26 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
         df = df[df["date"].ne("NaT")]
     return df
 
-# -----------------------------
-# ✅ 백업/복원/내보내기(Zip)
-# -----------------------------
-def _backup_file_if_exists(path: Path, label: str) -> Path | None:
+
+def _backup_file_if_exists(path: Path, label: str) -> None:
+    # 서버(Cloud) 안 백업은 "참고용"입니다. (컨테이너 초기화 시 함께 사라질 수 있음)
     try:
         if not path.exists() or path.stat().st_size == 0:
-            return None
+            return
         stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         backup = BACKUP_DIR / f"{label}_{stamp}{path.suffix}"
         backup.write_bytes(path.read_bytes())
-        return backup
     except Exception:
-        return None
+        pass
 
-def _backup_all_now(reason: str = "auto") -> None:
-    # 모든 데이터 파일을 한 번에 백업 (파일별로 timestamp 동일하게 맞춤)
-    stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-    for label, p in ALL_DATA_FILES:
-        try:
-            if p.exists() and p.stat().st_size > 0:
-                b = BACKUP_DIR / f"{label}_{reason}_{stamp}{p.suffix}"
-                b.write_bytes(p.read_bytes())
-        except Exception:
-            pass
 
-def _list_backups() -> list[tuple[str, Path]]:
-    # (표시명, 경로)
-    out: list[tuple[str, Path]] = []
-    for p in sorted(BACKUP_DIR.glob("*.csv"), reverse=True):
-        out.append((p.name, p))
-    return out
+def _mark_need_pc_backup(reason: str) -> None:
+    st.session_state["needs_pc_backup"] = True
+    st.session_state["needs_pc_backup_reason"] = reason
+    st.session_state["needs_pc_backup_ts"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def _restore_backup_file(backup_path: Path) -> bool:
-    # backup 파일명 예: base_menu_auto_YYYYMMDD_HHMMSS.csv 또는 menu_index_backup_...
-    name = backup_path.name
-    # 앞부분 label 추출
-    label = name.split("_")[0].strip().lower()
-    target_map = {
-        "menu": MENU_INDEX_PATH,        # 혹시 menu_로 백업된 경우 대비
-        "menuindex": MENU_INDEX_PATH,
-        "menuindexbackup": MENU_INDEX_PATH,
-        "menu_index": MENU_INDEX_PATH,
-        "base": BASE_MENU_PATH,
-        "base_menu": BASE_MENU_PATH,
-        "change": CHANGE_MENU_PATH,
-        "change_menu": CHANGE_MENU_PATH,
-        "delivery": DELIVERY_PATH,
-    }
 
-    # 더 정확한 매칭: prefix로 판단
-    target: Path | None = None
-    for k, v in [
-        ("menu_index", MENU_INDEX_PATH),
-        ("base_menu", BASE_MENU_PATH),
-        ("change_menu", CHANGE_MENU_PATH),
-        ("delivery", DELIVERY_PATH),
-    ]:
-        if name.startswith(k + "_"):
-            target = v
-            break
-
-    if target is None:
-        # fallback: label map
-        target = target_map.get(label)
-
-    if target is None:
-        return False
-
-    try:
-        # 복원 전에 현재본도 백업
-        _backup_file_if_exists(target, f"{target.stem}_before_restore")
-        shutil.copy2(backup_path, target)
-        return True
-    except Exception:
-        return False
-
-def _build_data_zip_bytes() -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for label, p in ALL_DATA_FILES:
-            if p.exists():
-                z.write(p, arcname=p.name)
-        # 로고/추출파일도 함께 넣고 싶으면 아래 주석 해제
-        # for extra in [ASSOC_LOGO_DATA, MOMS_LOGO_DATA, MOMS_BRAND_DATA, EXTRACTED_LOGO_PATH]:
-        #     if extra.exists():
-        #         z.write(extra, arcname=extra.name)
-    return buf.getvalue()
-
-def _restore_from_zip(uploaded_bytes: bytes) -> tuple[bool, str]:
-    try:
-        zbuf = io.BytesIO(uploaded_bytes)
-        with zipfile.ZipFile(zbuf, "r") as z:
-            names = z.namelist()
-            # 복원 전 전체 백업
-            _backup_all_now(reason="before_zip_restore")
-            # 지정 파일만 복원
-            wanted = {p.name: p for _, p in ALL_DATA_FILES}
-            restored_any = False
-            for n in names:
-                fn = Path(n).name
-                if fn in wanted:
-                    dest = wanted[fn]
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    with z.open(n) as src, open(dest, "wb") as out:
-                        out.write(src.read())
-                    restored_any = True
-        if restored_any:
-            return True, "ZIP 복원 완료"
-        return False, "ZIP 안에 복원 대상 CSV(menu_index/base_menu/change_menu/delivery)가 없습니다."
-    except Exception as e:
-        return False, f"ZIP 복원 실패: {e}"
-
-# -----------------------------
-# upsert/delete (저장 직전에 자동 전체 백업 1회)
-# -----------------------------
 def _upsert_by_date(path: Path, columns: list[str], d: date, value_col: str, value: str) -> None:
-    # ✅ 저장 직전에 전체 백업(사고 대비)
-    _backup_all_now(reason="auto")
     df = _read_csv(path, columns)
     key = d.isoformat()
     if (df["date"] == key).any():
@@ -276,15 +185,74 @@ def _upsert_by_date(path: Path, columns: list[str], d: date, value_col: str, val
         row["date"] = key
         row[value_col] = value
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+
+    # 서버 내 백업(참고용) + 저장
+    _backup_file_if_exists(path, f"{path.stem}_backup")
     _atomic_write_csv(df, path)
 
+    # ✅ PC 백업 필요 플래그
+    _mark_need_pc_backup(f"{path.name} 저장")
+
+
 def _delete_by_date(path: Path, columns: list[str], d: date) -> None:
-    # ✅ 삭제 직전에 전체 백업(사고 대비)
-    _backup_all_now(reason="auto")
     df = _read_csv(path, columns)
     key = d.isoformat()
     df = df[df["date"] != key].copy()
+
+    _backup_file_if_exists(path, f"{path.stem}_backup")
     _atomic_write_csv(df, path)
+
+    # ✅ PC 백업 필요 플래그
+    _mark_need_pc_backup(f"{path.name} 삭제")
+
+
+# -----------------------------
+# ZIP 백업(PC 다운로드) / ZIP 복원(업로드)
+# -----------------------------
+def _build_data_zip_bytes() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for arcname, p in ALL_DATA_FILES:
+            if p.exists():
+                z.write(p, arcname=arcname)
+        # 로고도 같이 보관하고 싶으면 주석 해제
+        # for extra in [ASSOC_LOGO_DATA, MOMS_LOGO_DATA, MOMS_BRAND_DATA, EXTRACTED_LOGO_PATH]:
+        #     if extra.exists():
+        #         z.write(extra, arcname=extra.name)
+    return buf.getvalue()
+
+
+def _restore_from_zip(zip_bytes: bytes) -> tuple[bool, str]:
+    try:
+        zbuf = io.BytesIO(zip_bytes)
+        with zipfile.ZipFile(zbuf, "r") as z:
+            names = z.namelist()
+
+            wanted = {arcname: path for arcname, path in ALL_DATA_FILES}
+
+            # 복원 전 현재본 안전 백업(서버 내 참고용)
+            stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+            for _, p in ALL_DATA_FILES:
+                if p.exists():
+                    _backup_file_if_exists(p, f"{p.stem}_before_zip_restore_{stamp}")
+
+            restored = 0
+            for n in names:
+                fn = Path(n).name
+                if fn in wanted:
+                    dest = wanted[fn]
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with z.open(n) as src, open(dest, "wb") as out:
+                        out.write(src.read())
+                    restored += 1
+
+        if restored == 0:
+            return False, "ZIP 안에 복원 대상 CSV(menu_index/base_menu/change_menu/delivery)가 없습니다."
+        _mark_need_pc_backup("ZIP 복원 후(새 상태) PC 백업 권장")
+        return True, f"ZIP 복원 완료 ({restored}개 파일)"
+    except Exception as e:
+        return False, f"ZIP 복원 실패: {e}"
+
 
 # -----------------------------
 # 이미지(Data URI)
@@ -297,8 +265,10 @@ def _data_uri(path: Path | None) -> str | None:
     mime = "image/png" if ext == "png" else "image/jpeg"
     return f"data:{mime};base64," + base64.b64encode(b).decode("utf-8")
 
+
 def _find_assoc_logo() -> Path | None:
     return _first_exists(ASSOC_LOGO_ROOT, ASSOC_LOGO_DATA)
+
 
 def _find_moms_logo() -> tuple[str | None, bool]:
     brand = _first_exists(MOMS_BRAND_ROOT, MOMS_BRAND_DATA)
@@ -311,6 +281,7 @@ def _find_moms_logo() -> tuple[str | None, bool]:
     if extracted:
         return _data_uri(extracted), False
     return None, False
+
 
 # -----------------------------
 # 메뉴 인덱스 (name/menu 호환 + 백업 + 자동 가나다정렬)
@@ -351,12 +322,13 @@ def _read_menu_index() -> list[str]:
 
     return items
 
+
 def _write_menu_index(items: list[str]) -> None:
-    # ✅ 저장 직전에 전체 백업(사고 대비)
-    _backup_all_now(reason="auto")
     items = _unique_sorted(items)
     _backup_file_if_exists(MENU_INDEX_PATH, "menu_index_backup")
     _atomic_write_csv(pd.DataFrame({"name": items}), MENU_INDEX_PATH)
+    _mark_need_pc_backup("menu_index.csv 저장")
+
 
 # -----------------------------
 # (선택) 포스터 사진에서 M 로고 자동 추출
@@ -398,6 +370,7 @@ def _ensure_extracted_logo_if_needed() -> None:
         logo_img.save(EXTRACTED_LOGO_PATH, format="PNG", optimize=True)
     except Exception:
         return
+
 
 # -----------------------------
 # 달력 데이터
@@ -450,6 +423,7 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 
     return out
 
+
 # -----------------------------
 # 날짜 선택 UI: 월~금 달력 버튼
 # -----------------------------
@@ -486,8 +460,9 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
 
     return st.session_state.get("selected_date", selected)
 
+
 # -----------------------------
-# 포스터 HTML (제목 3줄 + 색상 강조)
+# 포스터 HTML
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -732,8 +707,9 @@ def _build_weekday_poster_html(
     </style>
     """
 
-    thead = "<tr>" + "".join([f"<th>{w}</th>" for w in WEEKDAY_KR_WD]) + "</tr>"
+    thead = "<tr>" + "".join([f"<th>{w}</th>" for w in WEEKDAY_KR_WD]) + "</tr>
 
+    "
     body_rows = []
     for wk in rows5:
         tds = []
@@ -815,10 +791,64 @@ def _build_weekday_poster_html(
     </html>
     """
 
+
 # -----------------------------
 # 시작 시: 정식 로고 없을 때만 추출 시도
 # -----------------------------
 _ensure_extracted_logo_if_needed()
+
+# -----------------------------
+# 사이드바: PC 백업(다운로드/업로드)
+# -----------------------------
+if "needs_pc_backup" not in st.session_state:
+    st.session_state["needs_pc_backup"] = False
+    st.session_state["needs_pc_backup_reason"] = ""
+    st.session_state["needs_pc_backup_ts"] = ""
+
+with st.sidebar:
+    st.markdown("## 💾 PC 백업(필수)")
+    st.caption("Streamlit Cloud는 재시작 시 서버파일이 사라질 수 있어, **ZIP을 PC로 내려받아 보관**하는 방식이 안전합니다.")
+
+    if st.session_state.get("needs_pc_backup", False):
+        reason = st.session_state.get("needs_pc_backup_reason", "")
+        ts = st.session_state.get("needs_pc_backup_ts", "")
+        st.warning(f"방금 변경됨: {reason}\n\n➡️ **지금 ZIP 백업을 PC로 다운로드**하세요.\n\n(시간: {ts})")
+
+    zip_bytes = _build_data_zip_bytes()
+    zip_name = f"moms_data_backup_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    st.download_button(
+        "⬇️ 데이터 ZIP 백업 다운로드",
+        data=zip_bytes,
+        file_name=zip_name,
+        mime="application/zip",
+        use_container_width=True,
+    )
+
+    c_done1, c_done2 = st.columns(2)
+    with c_done1:
+        if st.button("✅ 다운로드 완료", use_container_width=True):
+            st.session_state["needs_pc_backup"] = False
+            st.session_state["needs_pc_backup_reason"] = ""
+            st.session_state["needs_pc_backup_ts"] = ""
+            st.rerun()
+    with c_done2:
+        if st.button("🔁 새 ZIP 갱신", use_container_width=True):
+            st.rerun()
+
+    st.divider()
+    st.markdown("### ♻️ ZIP 업로드로 복원")
+    up = st.file_uploader("ZIP 파일 선택", type=["zip"])
+    if up is not None:
+        ok, msg = _restore_from_zip(up.read())
+        if ok:
+            st.success(msg)
+            st.rerun()
+        else:
+            st.error(msg)
+
+    st.divider()
+    st.caption(f"서버 저장 경로(참고): {DATA_DIR}")
+
 
 # -----------------------------
 # UI
@@ -840,7 +870,7 @@ with colL:
             if x:
                 idx_items.append(x)
                 _write_menu_index(idx_items)
-                st.success("저장 완료(가나다 정렬)")
+                st.success("저장 완료(가나다 정렬) — 좌측에서 ZIP 백업을 다운로드하세요.")
                 st.rerun()
             else:
                 st.warning("메뉴명을 입력해 주세요.")
@@ -851,10 +881,10 @@ with colL:
             if del_item != "(선택)":
                 idx_items = [x for x in idx_items if x != del_item]
                 _write_menu_index(idx_items)
-                st.success("삭제 완료")
+                st.success("삭제 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
                 st.rerun()
 
-    st.caption(f"🧰 자동 백업 폴더: {BACKUP_DIR}")
+    st.caption(f"🧰 서버 내부 백업 폴더(참고): {BACKUP_DIR}")
 
     st.divider()
     st.subheader("2) 월 선택")
@@ -902,12 +932,12 @@ with colL:
                 st.warning("기본메뉴가 비어 있습니다.")
             else:
                 _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel, "base_menu", v)
-                st.success("기본메뉴 저장 완료")
+                st.success("기본메뉴 저장 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
                 st.rerun()
     with b2:
         if st.button("🧹 기본메뉴 삭제(해당일)", use_container_width=True):
             _delete_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel)
-            st.success("기본메뉴 삭제 완료")
+            st.success("기본메뉴 삭제 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
             st.rerun()
 
     st.markdown("**변경메뉴(있으면 입력)**")
@@ -924,87 +954,20 @@ with colL:
                 st.warning("변경메뉴가 비어 있습니다. (없음)으로 두려면 삭제를 사용하세요.")
             else:
                 _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", v)
-                st.success("변경메뉴 저장 완료")
+                st.success("변경메뉴 저장 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
                 st.rerun()
     with c4:
         if st.button("🧹 변경메뉴 삭제(해당일)", use_container_width=True):
             _delete_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel)
-            st.success("변경메뉴 삭제 완료")
+            st.success("변경메뉴 삭제 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
             st.rerun()
 
     st.markdown("**배달 여부**")
     deliv_choice = st.radio("배달", ["배달(Y)", "배달불요(N)"], index=0 if cur_deliv == "Y" else 1, horizontal=True)
     if st.button("💾 배달여부 저장", use_container_width=True):
         _upsert_by_date(DELIVERY_PATH, ["date", "delivery"], dsel, "delivery", "Y" if deliv_choice.startswith("배달(Y)") else "N")
-        st.success("배달여부 저장 완료")
+        st.success("배달여부 저장 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
         st.rerun()
-
-    # -----------------------------
-    # ✅ 데이터 진단/백업/복원 패널
-    # -----------------------------
-    st.divider()
-    st.subheader("🛡️ 데이터 보호(진단/백업/복원)")
-
-    # 파일 상태 표시
-    def _file_info(p: Path) -> Tuple[str, str, str]:
-        if not p.exists():
-            return ("없음", "-", "-")
-        try:
-            size = p.stat().st_size
-            mtime = pd.to_datetime(p.stat().st_mtime, unit="s").strftime("%Y-%m-%d %H:%M:%S")
-            # 행수(헤더 제외)
-            try:
-                df = pd.read_csv(p, dtype=str, encoding="utf-8-sig")
-                rows = max(0, len(df))
-            except Exception:
-                rows = "-"
-            return (f"{size} bytes", mtime, str(rows))
-        except Exception:
-            return ("확인불가", "확인불가", "확인불가")
-
-    for label, p in ALL_DATA_FILES:
-        size, mtime, rows = _file_info(p)
-        st.caption(f"- {p.name}  |  용량: {size}  |  수정: {mtime}  |  행수: {rows}")
-
-    # 즉시 전체 백업 버튼
-    if st.button("📌 지금 상태 전체 백업 만들기", use_container_width=True):
-        _backup_all_now(reason="manual")
-        st.success("전체 백업을 생성했습니다. (backups 폴더 확인)")
-        st.rerun()
-
-    # 백업에서 복원
-    backups = _list_backups()
-    if backups:
-        names = [n for n, _ in backups]
-        pick = st.selectbox("복원할 백업 파일 선택(최신이 위)", names, index=0)
-        if st.button("♻️ 선택 백업으로 복원", use_container_width=True):
-            bp = dict(backups).get(pick)
-            if bp and _restore_backup_file(bp):
-                st.success("복원 완료! 화면을 새로고침합니다.")
-                st.rerun()
-            else:
-                st.error("복원 실패: 파일명이 인식되지 않거나 복원 중 오류가 발생했습니다.")
-    else:
-        st.info("백업 파일이 아직 없습니다. (저장/삭제 시 자동 생성됩니다.)")
-
-    # ZIP 내보내기/가져오기
-    zip_bytes = _build_data_zip_bytes()
-    st.download_button(
-        label="⬇️ 데이터 ZIP(백업용) 다운로드",
-        data=zip_bytes,
-        file_name=f"moms_data_backup_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.zip",
-        mime="application/zip",
-        use_container_width=True,
-    )
-
-    up = st.file_uploader("⬆️ 데이터 ZIP 업로드(복원)", type=["zip"])
-    if up is not None:
-        ok, msg = _restore_from_zip(up.read())
-        if ok:
-            st.success(msg)
-            st.rerun()
-        else:
-            st.error(msg)
 
 with colR:
     st.subheader("4) 포스터(출력용 1장) 미리보기")
