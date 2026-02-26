@@ -414,7 +414,7 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
     return out
 
 # -----------------------------
-# 달력 칸 popover 편집
+# ✅ popover 편집(안정형: 저장 후 초기화는 다음 run에서 처리)
 # -----------------------------
 def _edit_popover(dt: date, idx_items: list[str]) -> None:
     key = dt.isoformat()
@@ -437,7 +437,18 @@ def _edit_popover(dt: date, idx_items: list[str]) -> None:
     c_text_key = f"p_{key}_c_text"
     d_key = f"p_{key}_deliv"
 
-    # 초기값(처음 열 때만)
+    clear_flag = f"p_{key}_clear_next"
+
+    # ✅ (중요) 위젯 생성 전에만 session_state를 초기화해야 안전
+    if st.session_state.get(clear_flag, False):
+        st.session_state[b_pick_key] = "(직접입력)"
+        st.session_state[b_text_key] = ""
+        st.session_state[c_pick_key] = "(없음)"
+        st.session_state[c_text_key] = ""
+        st.session_state[d_key] = "배달(Y)"
+        st.session_state[clear_flag] = False
+
+    # 최초 진입 시 기본값(현재 저장값)
     if b_pick_key not in st.session_state:
         st.session_state[b_pick_key] = "(직접입력)"
     if b_text_key not in st.session_state:
@@ -452,6 +463,7 @@ def _edit_popover(dt: date, idx_items: list[str]) -> None:
     st.markdown("**기본**")
     b_pick = st.selectbox("기본(인덱스) — 열고 타이핑 검색", ["(직접입력)"] + idx_items, key=b_pick_key)
     if b_pick != "(직접입력)":
+        # ✅ 위젯 key를 직접 set 하지 않고, 텍스트 key만 변경 (이건 같은 run에서도 안전)
         st.session_state[b_text_key] = b_pick
     st.text_input("기본(입력)", key=b_text_key, placeholder="기본메뉴 입력")
 
@@ -480,13 +492,8 @@ def _edit_popover(dt: date, idx_items: list[str]) -> None:
             vd = "Y" if st.session_state.get(d_key, "배달(Y)").startswith("배달(Y)") else "N"
             _upsert_by_date(DELIVERY_PATH, ["date", "delivery"], dt, "delivery", vd)
 
-            # ✅ 저장 후 입력값 비우기(빠른 연속 입력)
-            st.session_state[b_pick_key] = "(직접입력)"
-            st.session_state[b_text_key] = ""
-            st.session_state[c_pick_key] = "(없음)"
-            st.session_state[c_text_key] = ""
-            st.session_state[d_key] = "배달(Y)"
-
+            # ✅ 같은 run에서 위젯 key를 건드리지 말고, 다음 run에서 비우도록 플래그만
+            st.session_state[clear_flag] = True
             st.session_state["selected_date"] = dt
             st.rerun()
 
@@ -494,6 +501,8 @@ def _edit_popover(dt: date, idx_items: list[str]) -> None:
         if st.button("🧹 기본/변경 삭제", key=f"p_{key}_clr", use_container_width=True):
             _delete_by_date(BASE_MENU_PATH, ["date", "base_menu"], dt)
             _delete_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dt)
+
+            st.session_state[clear_flag] = True
             st.session_state["selected_date"] = dt
             st.rerun()
 
@@ -545,7 +554,6 @@ def _weekday_calendar_picker(y: int, m: int, selected: date, idx_items: list[str
                     st.session_state["selected_date"] = dt
                     _edit_popover(dt, idx_items)
             else:
-                # popover 없으면 (구버전) 클릭 시 선택만
                 if cols[c].button(label, key=f"d_{y}_{m}_{day}", use_container_width=True):
                     st.session_state["selected_date"] = dt
                     st.rerun()
@@ -925,7 +933,6 @@ with st.sidebar:
             st.session_state["needs_pc_backup_ts"] = ""
     with c_done2:
         if st.button("🔁 새 ZIP 갱신", use_container_width=True):
-            # ZIP 파일명(시간)만 갱신 — 데이터는 절대 건드리지 않음
             st.session_state["zip_nonce"] = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
     st.divider()
