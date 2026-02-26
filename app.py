@@ -56,6 +56,7 @@ ALL_DATA_FILES = [
     ("delivery.csv", DELIVERY_PATH),
 ]
 
+# 서버 내부 백업 폭증 방지
 MAX_SERVER_BACKUPS_PER_LABEL = 30
 
 # -----------------------------
@@ -110,6 +111,14 @@ def _unique_sorted(items: list[str]) -> list[str]:
             seen.add(t)
     out.sort(key=_ko_sort_key)
     return out
+
+def _filter_items(items: list[str], q: str) -> list[str]:
+    """검색어(첫 글자 등)로 빠르게 필터"""
+    q = _safe_str(q)
+    if not q:
+        return items
+    q2 = q.casefold()
+    return [it for it in items if q2 in it.casefold()]
 
 # -----------------------------
 # 원자적 CSV 저장 + 안전 읽기
@@ -454,8 +463,11 @@ def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
             label = f"{day:02d}"
             if sel_day == day:
                 label = f"✅ {label}"
+
+            # ✅ 한 번 클릭하면 바로 선택 표시되도록: 클릭 즉시 rerun
             if cols[c].button(label, key=f"d_{y}_{m}_{day}", use_container_width=True):
                 st.session_state["selected_date"] = dt
+                st.rerun()
 
     return st.session_state.get("selected_date", selected)
 
@@ -801,17 +813,9 @@ if "needs_pc_backup" not in st.session_state:
     st.session_state["needs_pc_backup_reason"] = ""
     st.session_state["needs_pc_backup_ts"] = ""
 
-# ✅ ZIP 파일명(타임스탬프)만 갱신하기 위한 nonce
+# ZIP 파일명 갱신용 nonce
 if "zip_nonce" not in st.session_state:
     st.session_state["zip_nonce"] = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-
-def _fmt_mtime(p: Path) -> str:
-    try:
-        if not p.exists():
-            return "없음"
-        return pd.Timestamp(p.stat().st_mtime, unit="s").strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return "확인불가"
 
 with st.sidebar:
     st.markdown("## 💾 PC 백업(필수)")
@@ -822,10 +826,8 @@ with st.sidebar:
         ts = st.session_state.get("needs_pc_backup_ts", "")
         st.warning(f"방금 변경됨: {reason}\n\n➡️ **지금 ZIP 백업을 PC로 다운로드**하세요.\n\n(시간: {ts})")
 
-    # ✅ ZIP은 '현재 CSV를 읽어서' 매번 즉시 생성 (데이터를 절대 수정/삭제하지 않음)
     zip_bytes = _build_data_zip_bytes()
     zip_name = f"moms_data_backup_{st.session_state['zip_nonce']}.zip"
-
     st.download_button(
         "⬇️ 데이터 ZIP 백업 다운로드",
         data=zip_bytes,
@@ -840,17 +842,12 @@ with st.sidebar:
             st.session_state["needs_pc_backup"] = False
             st.session_state["needs_pc_backup_reason"] = ""
             st.session_state["needs_pc_backup_ts"] = ""
-            # 버튼 클릭 자체로 rerun은 발생하므로, 추가 st.rerun() 불필요
     with c_done2:
-        # ✅ “새 ZIP 갱신”은 데이터에 손대지 않고, ZIP 파일명(시간)만 새로고침
         if st.button("🔁 새 ZIP 갱신", use_container_width=True):
             st.session_state["zip_nonce"] = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
-    st.caption("※ ‘새 ZIP 갱신’은 **ZIP 파일명/시간만 바꾸는 기능**이며, CSV 데이터를 삭제/초기화하지 않습니다.")
-
     st.divider()
     st.markdown("### ♻️ ZIP 업로드로 복원(주의: 덮어쓰기)")
-
     confirm = st.checkbox("⚠️ 업로드한 ZIP으로 현재 데이터를 덮어쓰는 것을 이해했습니다.", value=False)
     up = st.file_uploader("ZIP 파일 선택", type=["zip"])
     if up is not None:
@@ -864,11 +861,6 @@ with st.sidebar:
                 st.rerun()
             else:
                 st.error(msg)
-
-    st.divider()
-    st.markdown("### 🧾 CSV 저장 상태(마지막 저장 시각)")
-    for name, p in ALL_DATA_FILES:
-        st.write(f"- {name}: **{_fmt_mtime(p)}**")
 
     st.divider()
     st.caption(f"서버 저장 경로(참고): {DATA_DIR}")
@@ -907,8 +899,6 @@ with colL:
                 st.success("삭제 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
                 st.rerun()
 
-    st.caption(f"🧰 서버 내부 백업 폴더(참고): {BACKUP_DIR}  /  (label별 최근 {MAX_SERVER_BACKUPS_PER_LABEL}개만 유지)")
-
     st.divider()
     st.subheader("2) 월 선택")
 
@@ -939,52 +929,114 @@ with colL:
     if cur_deliv not in ["Y", "N"]:
         cur_deliv = "Y"
 
+    # ✅ 날짜가 바뀌면 입력창은 "해당 날짜의 저장값"으로 셋업
+    if st.session_state.get("active_date_key") != key:
+        st.session_state["active_date_key"] = key
+
+        st.session_state["base_search"] = ""
+        st.session_state["base_pick"] = "(직접입력)"
+        st.session_state["base_text"] = cur_base
+
+        st.session_state["change_search"] = ""
+        st.session_state["change_pick"] = "(없음)"
+        st.session_state["change_text"] = cur_change
+
     st.markdown(f"**선택 날짜:** {key}  ({WEEKDAY_FULL[dsel.weekday()]})")
 
+    # -----------------
+    # 기본메뉴(검색 + 인덱스 + 직접입력)
+    # -----------------
     st.markdown("**기본메뉴**")
-    base_pick = st.selectbox("기본메뉴(인덱스)", ["(직접입력)"] + idx_items, index=0)
-    base_text = st.text_input("기본메뉴(직접입력)", value=cur_base if base_pick == "(직접입력)" else base_pick)
+    st.text_input("🔎 기본메뉴 검색(첫 글자 입력)", key="base_search", placeholder="예: 감 / 소 / 닭 ...")
+    base_filtered = _filter_items(idx_items, st.session_state.get("base_search", ""))
+    base_pick = st.selectbox(
+        "기본메뉴(인덱스)",
+        ["(직접입력)"] + base_filtered,
+        key="base_pick",
+    )
+
     if base_pick != "(직접입력)":
-        base_text = base_pick
+        st.text_input("기본메뉴(선택됨)", value=base_pick, disabled=True)
+        st.session_state["base_text"] = base_pick
+    else:
+        st.text_input("기본메뉴(직접입력)", key="base_text", placeholder="예: 소고기미역국")
 
     b1, b2 = st.columns([1, 1])
     with b1:
         if st.button("💾 기본메뉴 저장", use_container_width=True):
-            v = _safe_str(base_text)
+            v = _safe_str(st.session_state.get("base_text", ""))
             if not v:
                 st.warning("기본메뉴가 비어 있습니다.")
             else:
                 _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel, "base_menu", v)
+
+                # ✅ 저장 후 입력칸 비우기(빠른 연속 입력)
+                st.session_state["base_search"] = ""
+                st.session_state["base_pick"] = "(직접입력)"
+                st.session_state["base_text"] = ""
+
                 st.success("기본메뉴 저장 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
                 st.rerun()
     with b2:
         if st.button("🧹 기본메뉴 삭제(해당일)", use_container_width=True):
             _delete_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel)
+
+            # 삭제 후도 입력칸 정리
+            st.session_state["base_search"] = ""
+            st.session_state["base_pick"] = "(직접입력)"
+            st.session_state["base_text"] = ""
+
             st.success("기본메뉴 삭제 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
             st.rerun()
 
+    # -----------------
+    # 변경메뉴(검색 + 인덱스 + 직접입력)
+    # -----------------
     st.markdown("**변경메뉴(있으면 입력)**")
-    change_pick = st.selectbox("변경메뉴(인덱스)", ["(없음)"] + idx_items, index=0)
-    change_text = st.text_input("변경메뉴(직접입력)", value=cur_change if change_pick == "(없음)" else change_pick)
+    st.text_input("🔎 변경메뉴 검색(첫 글자 입력)", key="change_search", placeholder="예: 감 / 소 / 닭 ...")
+    change_filtered = _filter_items(idx_items, st.session_state.get("change_search", ""))
+    change_pick = st.selectbox(
+        "변경메뉴(인덱스)",
+        ["(없음)"] + change_filtered,
+        key="change_pick",
+    )
+
     if change_pick != "(없음)":
-        change_text = change_pick
+        st.text_input("변경메뉴(선택됨)", value=change_pick, disabled=True)
+        st.session_state["change_text"] = change_pick
+    else:
+        st.text_input("변경메뉴(직접입력)", key="change_text", placeholder="예: 순두부찌개(변경)")
 
     c3, c4 = st.columns([1, 1])
     with c3:
         if st.button("💾 변경메뉴 저장", use_container_width=True):
-            v = _safe_str(change_text)
-            if not v or v == "(없음)":
+            v = _safe_str(st.session_state.get("change_text", ""))
+            if not v:
                 st.warning("변경메뉴가 비어 있습니다. (없음)으로 두려면 삭제를 사용하세요.")
             else:
                 _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", v)
+
+                # ✅ 저장 후 입력칸 비우기
+                st.session_state["change_search"] = ""
+                st.session_state["change_pick"] = "(없음)"
+                st.session_state["change_text"] = ""
+
                 st.success("변경메뉴 저장 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
                 st.rerun()
     with c4:
         if st.button("🧹 변경메뉴 삭제(해당일)", use_container_width=True):
             _delete_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel)
+
+            st.session_state["change_search"] = ""
+            st.session_state["change_pick"] = "(없음)"
+            st.session_state["change_text"] = ""
+
             st.success("변경메뉴 삭제 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
             st.rerun()
 
+    # -----------------
+    # 배달 여부
+    # -----------------
     st.markdown("**배달 여부**")
     deliv_choice = st.radio("배달", ["배달(Y)", "배달불요(N)"], index=0 if cur_deliv == "Y" else 1, horizontal=True)
     if st.button("💾 배달여부 저장", use_container_width=True):
