@@ -186,7 +186,6 @@ def _backup_file_if_exists(path: Path, label: str) -> None:
             return
 
         cur_bytes = path.read_bytes()
-
         last = _latest_backup_path(label, path.suffix)
         if last is not None:
             try:
@@ -233,7 +232,7 @@ def _delete_by_date(path: Path, columns: list[str], d: date) -> None:
     _mark_need_pc_backup(f"{path.name} 삭제")
 
 # -----------------------------
-# ZIP 백업
+# ZIP 백업/복원
 # -----------------------------
 def _build_data_zip_bytes() -> bytes:
     buf = io.BytesIO()
@@ -370,43 +369,7 @@ def _ensure_extracted_logo_if_needed() -> None:
         return
 
 # -----------------------------
-# 달력/날짜 선택
-# -----------------------------
-def _weekday_calendar_picker(y: int, m: int, selected: date) -> date:
-    cal = calendar.Calendar(firstweekday=0)
-    weeks7 = cal.monthdayscalendar(y, m)
-
-    rows5: list[list[int]] = []
-    for wk in weeks7:
-        wd = wk[:5]
-        if all(d == 0 for d in wd):
-            continue
-        rows5.append(wd)
-
-    st.markdown("**📅 날짜 선택(평일만)**")
-    sel_day = selected.day if (selected.year == y and selected.month == m) else None
-
-    hcols = st.columns(5)
-    for i, w in enumerate(WEEKDAY_KR_WD):
-        hcols[i].markdown(f"<div style='text-align:center;font-weight:900'>{w}</div>", unsafe_allow_html=True)
-
-    for r, wk in enumerate(rows5):
-        cols = st.columns(5)
-        for c, day in enumerate(wk):
-            if day == 0:
-                cols[c].button(" ", key=f"blank_{y}_{m}_{r}_{c}", disabled=True, use_container_width=True)
-                continue
-            dt = date(y, m, day)
-            label = f"{day:02d}" if sel_day != day else f"✅ {day:02d}"
-            if cols[c].button(label, key=f"d_{y}_{m}_{day}", use_container_width=True):
-                st.session_state["selected_date"] = dt
-                st.session_state["show_quick_editor"] = True  # ✅ 날짜 클릭 즉시 입력창 열기
-                st.rerun()
-
-    return st.session_state.get("selected_date", selected)
-
-# -----------------------------
-# 달력 데이터 맵
+# 월별 데이터 map (표시용)
 # -----------------------------
 def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
     base = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
@@ -419,41 +382,192 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
     delivery = delivery[delivery["date"].str.startswith(prefix)].copy()
 
     out: dict[int, dict[str, str]] = {}
+
     for _, r in base.iterrows():
         ds = _safe_str(r.get("date"))
-        if len(ds) >= 2:
-            try:
-                d = int(ds[-2:])
-                out.setdefault(d, {})
-                out[d]["base"] = _safe_str(r.get("base_menu"))
-            except Exception:
-                pass
+        if len(ds) < 2:
+            continue
+        try:
+            d = int(ds[-2:])
+        except Exception:
+            continue
+        out.setdefault(d, {})
+        out[d]["base"] = _safe_str(r.get("base_menu"))
 
     for _, r in change.iterrows():
         ds = _safe_str(r.get("date"))
-        if len(ds) >= 2:
-            try:
-                d = int(ds[-2:])
-                out.setdefault(d, {})
-                out[d]["change"] = _safe_str(r.get("change_menu"))
-            except Exception:
-                pass
+        if len(ds) < 2:
+            continue
+        try:
+            d = int(ds[-2:])
+        except Exception:
+            continue
+        out.setdefault(d, {})
+        out[d]["change"] = _safe_str(r.get("change_menu"))
 
     for _, r in delivery.iterrows():
         ds = _safe_str(r.get("date"))
-        if len(ds) >= 2:
-            try:
-                d = int(ds[-2:])
-                out.setdefault(d, {})
-                v = _safe_str(r.get("delivery")).upper()
-                out[d]["delivery"] = "N" if v == "N" else "Y"
-            except Exception:
-                pass
+        if len(ds) < 2:
+            continue
+        try:
+            d = int(ds[-2:])
+        except Exception:
+            continue
+        out.setdefault(d, {})
+        v = _safe_str(r.get("delivery", "Y")).upper()
+        out[d]["delivery"] = "N" if v == "N" else "Y"
 
     return out
 
 # -----------------------------
-# 포스터 HTML (그대로)
+# 날짜칸 클릭 → 그 자리에서 입력(popover)
+# -----------------------------
+def _edit_popover(dt: date, idx_items: list[str]) -> None:
+    """달력 칸 내부 popover 내용"""
+    key = dt.isoformat()
+
+    base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
+    change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
+    deliv_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
+
+    cur_base = _safe_str(base_df.loc[base_df["date"] == key, "base_menu"].iloc[0]) if (base_df["date"] == key).any() else ""
+    cur_change = _safe_str(change_df.loc[change_df["date"] == key, "change_menu"].iloc[0]) if (change_df["date"] == key).any() else ""
+    cur_deliv = _safe_str(deliv_df.loc[deliv_df["date"] == key, "delivery"].iloc[0]).upper() if (deliv_df["date"] == key).any() else "Y"
+    if cur_deliv not in ["Y", "N"]:
+        cur_deliv = "Y"
+
+    st.caption(f"선택: {key} ({WEEKDAY_FULL[dt.weekday()]})")
+
+    # ✅ selectbox 자체에서 타이핑하면 메뉴 검색 가능(별도 검색창 없음)
+    b_pick_key = f"p_{key}_b_pick"
+    b_text_key = f"p_{key}_b_text"
+    c_pick_key = f"p_{key}_c_pick"
+    c_text_key = f"p_{key}_c_text"
+    d_key = f"p_{key}_deliv"
+
+    if b_pick_key not in st.session_state:
+        st.session_state[b_pick_key] = "(직접입력)"
+    if b_text_key not in st.session_state:
+        st.session_state[b_text_key] = cur_base
+    if c_pick_key not in st.session_state:
+        st.session_state[c_pick_key] = "(없음)"
+    if c_text_key not in st.session_state:
+        st.session_state[c_text_key] = cur_change
+    if d_key not in st.session_state:
+        st.session_state[d_key] = "배달(Y)" if cur_deliv == "Y" else "배달불요(N)"
+
+    st.markdown("**기본**")
+    b_pick = st.selectbox("기본(인덱스)", ["(직접입력)"] + idx_items, key=b_pick_key)
+    if b_pick != "(직접입력)":
+        st.session_state[b_text_key] = b_pick
+    st.text_input("기본(입력)", key=b_text_key)
+
+    st.markdown("**변경(선택)**")
+    c_pick = st.selectbox("변경(인덱스)", ["(없음)"] + idx_items, key=c_pick_key)
+    if c_pick != "(없음)":
+        st.session_state[c_text_key] = c_pick
+    st.text_input("변경(입력)", key=c_text_key)
+
+    st.markdown("**배달**")
+    st.radio("배달", ["배달(Y)", "배달불요(N)"], key=d_key, horizontal=True)
+
+    s1, s2 = st.columns(2)
+    with s1:
+        if st.button("💾 저장", key=f"p_{key}_save", use_container_width=True):
+            # 기본은 비어있으면 저장 안 함
+            vb = _safe_str(st.session_state.get(b_text_key, ""))
+            if vb:
+                _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dt, "base_menu", vb)
+
+            # 변경은 비어있으면 저장 안 함
+            vc = _safe_str(st.session_state.get(c_text_key, ""))
+            if vc and vc != "(없음)":
+                _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dt, "change_menu", vc)
+            else:
+                # 비우려면 삭제
+                _delete_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dt)
+
+            vd = "Y" if st.session_state.get(d_key, "배달(Y)").startswith("배달(Y)") else "N"
+            _upsert_by_date(DELIVERY_PATH, ["date", "delivery"], dt, "delivery", vd)
+
+            # ✅ 저장 후 입력칸 비우기(빠른 입력)
+            st.session_state[b_pick_key] = "(직접입력)"
+            st.session_state[b_text_key] = ""
+            st.session_state[c_pick_key] = "(없음)"
+            st.session_state[c_text_key] = ""
+            st.session_state[d_key] = "배달(Y)"
+
+            st.session_state["selected_date"] = dt
+            st.rerun()
+
+    with s2:
+        if st.button("🧹 기본/변경 삭제", key=f"p_{key}_clr", use_container_width=True):
+            _delete_by_date(BASE_MENU_PATH, ["date", "base_menu"], dt)
+            _delete_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dt)
+            st.session_state["selected_date"] = dt
+            st.rerun()
+
+def _weekday_calendar_picker(y: int, m: int, selected: date, idx_items: list[str]) -> date:
+    cal = calendar.Calendar(firstweekday=0)
+    weeks7 = cal.monthdayscalendar(y, m)
+
+    rows5: list[list[int]] = []
+    for wk in weeks7:
+        wd = wk[:5]
+        if all(d == 0 for d in wd):
+            continue
+        rows5.append(wd)
+
+    st.markdown("**📅 날짜 선택(평일만) — 날짜를 누르면 그 자리에서 입력창이 뜹니다**")
+    sel_day = selected.day if (selected.year == y and selected.month == m) else None
+
+    # popover 사용 가능 여부(버전 차이 대비)
+    has_popover = hasattr(st, "popover")
+
+    hcols = st.columns(5)
+    for i, w in enumerate(WEEKDAY_KR_WD):
+        hcols[i].markdown(f"<div style='text-align:center;font-weight:900'>{w}</div>", unsafe_allow_html=True)
+
+    data_map = _get_day_record_map(y, m)
+
+    for r, wk in enumerate(rows5):
+        cols = st.columns(5)
+        for c, day in enumerate(wk):
+            if day == 0:
+                cols[c].button(" ", key=f"blank_{y}_{m}_{r}_{c}", disabled=True, use_container_width=True)
+                continue
+
+            dt = date(y, m, day)
+            rec = data_map.get(day, {})
+            has_change = bool(_safe_str(rec.get("change", "")))
+            is_nodelivery = (_safe_str(rec.get("delivery", "Y")).upper() == "N")
+
+            mark = ""
+            if has_change and is_nodelivery:
+                mark = " ✔✖"
+            elif has_change:
+                mark = " ✔"
+            elif is_nodelivery:
+                mark = " ✖"
+
+            label = f"{day:02d}{mark}"
+            if sel_day == day:
+                label = f"✅ {label}"
+
+            if has_popover:
+                with cols[c].popover(label, use_container_width=True):
+                    st.session_state["selected_date"] = dt  # 선택 표시 유지
+                    _edit_popover(dt, idx_items)
+            else:
+                # fallback: popover가 없으면 기존처럼 클릭 시 선택만(아래에서 입력)
+                if cols[c].button(label, key=f"d_{y}_{m}_{day}", use_container_width=True):
+                    st.session_state["selected_date"] = dt
+                    st.rerun()
+
+    return st.session_state.get("selected_date", selected)
+
+# -----------------------------
+# 포스터 HTML (기존 그대로)
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -781,13 +895,14 @@ def _build_weekday_poster_html(
     </html>
     """
 
+
 # -----------------------------
 # 시작 시
 # -----------------------------
 _ensure_extracted_logo_if_needed()
 
 # -----------------------------
-# 사이드바: PC 백업
+# 사이드바: PC 백업(다운로드/업로드)
 # -----------------------------
 if "needs_pc_backup" not in st.session_state:
     st.session_state["needs_pc_backup"] = False
@@ -846,7 +961,7 @@ with st.sidebar:
     st.caption(f"서버 저장 경로(참고): {DATA_DIR}")
 
 # -----------------------------
-# 메인 UI
+# UI
 # -----------------------------
 st.title("🍱 맘스락 식단 변경 프로그램")
 st.caption(f"저장 경로: {DATA_DIR}")
@@ -869,7 +984,6 @@ with colL:
                 st.rerun()
             else:
                 st.warning("메뉴명을 입력해 주세요.")
-
     with c2:
         del_item = st.selectbox("삭제할 메뉴 선택", ["(선택)"] + idx_items)
         if st.button("🗑️ 선택 메뉴 삭제", use_container_width=True):
@@ -888,94 +1002,13 @@ with colL:
 
     if "selected_date" not in st.session_state:
         st.session_state["selected_date"] = date(y, m, 1)
-    if "show_quick_editor" not in st.session_state:
-        st.session_state["show_quick_editor"] = False
 
     sd: date = st.session_state["selected_date"]
     if sd.year != y or sd.month != m:
         st.session_state["selected_date"] = date(y, m, 1)
 
-    # ✅ 달력
-    dsel = _weekday_calendar_picker(y, m, st.session_state["selected_date"])
-    key = dsel.isoformat()
-
-    # ✅ 날짜 클릭 시 달력 바로 아래에 입력 패널 자동 오픈
-    if st.session_state.get("show_quick_editor", False):
-        st.markdown("---")
-        st.subheader("📝 빠른 입력(날짜 클릭 후 바로 입력)")
-
-        base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
-        change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
-        deliv_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
-
-        cur_base = _safe_str(base_df.loc[base_df["date"] == key, "base_menu"].iloc[0]) if (base_df["date"] == key).any() else ""
-        cur_change = _safe_str(change_df.loc[change_df["date"] == key, "change_menu"].iloc[0]) if (change_df["date"] == key).any() else ""
-        cur_deliv = _safe_str(deliv_df.loc[deliv_df["date"] == key, "delivery"].iloc[0]).upper() if (deliv_df["date"] == key).any() else "Y"
-        if cur_deliv not in ["Y", "N"]:
-            cur_deliv = "Y"
-
-        # 날짜가 바뀌면 해당 날짜 값으로 셋업
-        if st.session_state.get("quick_key") != key:
-            st.session_state["quick_key"] = key
-            st.session_state["q_base_pick"] = "(직접입력)"
-            st.session_state["q_base_text"] = cur_base
-            st.session_state["q_change_pick"] = "(없음)"
-            st.session_state["q_change_text"] = cur_change
-            st.session_state["q_deliv_choice"] = "배달(Y)" if cur_deliv == "Y" else "배달불요(N)"
-
-        st.markdown(f"**선택 날짜:** {key}  ({WEEKDAY_FULL[dsel.weekday()]})")
-
-        # 기본메뉴
-        st.markdown("**기본메뉴**")
-        q_base_pick = st.selectbox("기본메뉴(인덱스)", ["(직접입력)"] + idx_items, key="q_base_pick")
-        if q_base_pick != "(직접입력)":
-            st.session_state["q_base_text"] = q_base_pick
-        st.text_input("기본메뉴(입력)", key="q_base_text")
-
-        # 변경메뉴
-        st.markdown("**변경메뉴(있으면 입력)**")
-        q_change_pick = st.selectbox("변경메뉴(인덱스)", ["(없음)"] + idx_items, key="q_change_pick")
-        if q_change_pick != "(없음)":
-            st.session_state["q_change_text"] = q_change_pick
-        st.text_input("변경메뉴(입력)", key="q_change_text")
-
-        # 배달
-        st.markdown("**배달 여부**")
-        st.radio("배달", ["배달(Y)", "배달불요(N)"], key="q_deliv_choice", horizontal=True)
-
-        s1, s2, s3 = st.columns([1, 1, 1])
-        with s1:
-            if st.button("💾 저장(한번에)", use_container_width=True):
-                # 기본
-                v_base = _safe_str(st.session_state.get("q_base_text", ""))
-                if v_base:
-                    _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dsel, "base_menu", v_base)
-                # 변경(빈값이면 저장 안함)
-                v_ch = _safe_str(st.session_state.get("q_change_text", ""))
-                if v_ch and v_ch != "(없음)":
-                    _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dsel, "change_menu", v_ch)
-                # 배달
-                v_deliv = "Y" if st.session_state.get("q_deliv_choice", "배달(Y)").startswith("배달(Y)") else "N"
-                _upsert_by_date(DELIVERY_PATH, ["date", "delivery"], dsel, "delivery", v_deliv)
-
-                # ✅ 저장 후 입력칸 비우기(빠른 연속 입력)
-                st.session_state["q_base_pick"] = "(직접입력)"
-                st.session_state["q_base_text"] = ""
-                st.session_state["q_change_pick"] = "(없음)"
-                st.session_state["q_change_text"] = ""
-                st.session_state["q_deliv_choice"] = "배달(Y)"
-                st.success("저장 완료 — 다음 날짜를 클릭해 계속 입력하세요.")
-                st.rerun()
-
-        with s2:
-            if st.button("🧹 입력창 닫기", use_container_width=True):
-                st.session_state["show_quick_editor"] = False
-                st.rerun()
-
-        with s3:
-            if st.button("🧾 현재값 다시 불러오기", use_container_width=True):
-                st.session_state.pop("quick_key", None)
-                st.rerun()
+    # ✅ 달력 칸에서 바로 입력(popover)
+    _weekday_calendar_picker(y, m, st.session_state["selected_date"], idx_items)
 
 with colR:
     st.subheader("4) 포스터(출력용 1장) 미리보기")
