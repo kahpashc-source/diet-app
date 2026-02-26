@@ -56,6 +56,11 @@ ALL_DATA_FILES = [
     ("delivery.csv", DELIVERY_PATH),
 ]
 
+# ✅ 서버(Cloud) 내부 백업 파일이 너무 많이 생성되는 문제 해결
+# - 같은 내용이면 백업 생성 스킵
+# - 종류(label)별로 최근 N개만 유지
+MAX_SERVER_BACKUPS_PER_LABEL = 30
+
 # -----------------------------
 # 안전 문자열 처리
 # -----------------------------
@@ -147,14 +152,64 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
         df = df[df["date"].ne("NaT")]
     return df
 
+# -----------------------------
+# 서버 내부 백업(참고용) - 폭증 방지 기능 포함
+# -----------------------------
+def _prune_backups_for_label(label: str, suffix: str) -> None:
+    """label_YYYYMMDD_HHMMSS.csv 형태의 파일을 label별로 최근 N개만 남김"""
+    try:
+        prefix = f"{label}_"
+        files = sorted(
+            [p for p in BACKUP_DIR.glob(f"{prefix}*{suffix}") if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for p in files[MAX_SERVER_BACKUPS_PER_LABEL:]:
+            try:
+                p.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def _latest_backup_path(label: str, suffix: str) -> Path | None:
+    try:
+        prefix = f"{label}_"
+        files = sorted(
+            [p for p in BACKUP_DIR.glob(f"{prefix}*{suffix}") if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return files[0] if files else None
+    except Exception:
+        return None
+
 def _backup_file_if_exists(path: Path, label: str) -> None:
     # 서버(Cloud) 내부 백업: 참고용(컨테이너 초기화 시 같이 사라질 수 있음)
+    # ✅ 개선: (1) 내용이 같으면 백업 생성 스킵 (2) label별 최근 N개만 유지
     try:
         if not path.exists() or path.stat().st_size == 0:
             return
+
+        cur_bytes = path.read_bytes()
+
+        last = _latest_backup_path(label, path.suffix)
+        if last is not None:
+            try:
+                if last.exists() and last.stat().st_size == len(cur_bytes):
+                    # 크기가 같으면 내용 비교(작은 파일이라 부담 적음)
+                    if last.read_bytes() == cur_bytes:
+                        # 같은 내용이면 백업 파일 추가 생성하지 않음
+                        return
+            except Exception:
+                pass
+
         stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         backup = BACKUP_DIR / f"{label}_{stamp}{path.suffix}"
-        backup.write_bytes(path.read_bytes())
+        backup.write_bytes(cur_bytes)
+
+        _prune_backups_for_label(label, path.suffix)
+
     except Exception:
         pass
 
@@ -205,7 +260,7 @@ def _restore_from_zip(zip_bytes: bytes) -> tuple[bool, str]:
             names = z.namelist()
             wanted = {arcname: path for arcname, path in ALL_DATA_FILES}
 
-            # 복원 전 현재본 백업(서버 참고용)
+            # 복원 전 현재본 백업(서버 참고용) - 폭증 방지 로직 포함
             stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
             for _, p in ALL_DATA_FILES:
                 if p.exists():
@@ -659,7 +714,6 @@ def _build_weekday_poster_html(
     </style>
     """
 
-    # ✅ 여기(the a d) 문법오류 수정 완료
     thead = "<tr>" + "".join([f"<th>{w}</th>" for w in WEEKDAY_KR_WD]) + "</tr>"
 
     body_rows = []
@@ -834,7 +888,7 @@ with colL:
                 st.success("삭제 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
                 st.rerun()
 
-    st.caption(f"🧰 서버 내부 백업 폴더(참고): {BACKUP_DIR}")
+    st.caption(f"🧰 서버 내부 백업 폴더(참고): {BACKUP_DIR}  /  (label별 최근 {MAX_SERVER_BACKUPS_PER_LABEL}개만 유지)")
 
     st.divider()
     st.subheader("2) 월 선택")
@@ -915,7 +969,13 @@ with colL:
     st.markdown("**배달 여부**")
     deliv_choice = st.radio("배달", ["배달(Y)", "배달불요(N)"], index=0 if cur_deliv == "Y" else 1, horizontal=True)
     if st.button("💾 배달여부 저장", use_container_width=True):
-        _upsert_by_date(DELIVERY_PATH, ["date", "delivery"], dsel, "delivery", "Y" if deliv_choice.startswith("배달(Y)") else "N")
+        _upsert_by_date(
+            DELIVERY_PATH,
+            ["date", "delivery"],
+            dsel,
+            "delivery",
+            "Y" if deliv_choice.startswith("배달(Y)") else "N",
+        )
         st.success("배달여부 저장 완료 — 좌측에서 ZIP 백업을 다운로드하세요.")
         st.rerun()
 
