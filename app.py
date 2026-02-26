@@ -56,9 +56,6 @@ ALL_DATA_FILES = [
     ("delivery.csv", DELIVERY_PATH),
 ]
 
-# ✅ 서버(Cloud) 내부 백업 파일이 너무 많이 생성되는 문제 해결
-# - 같은 내용이면 백업 생성 스킵
-# - 종류(label)별로 최근 N개만 유지
 MAX_SERVER_BACKUPS_PER_LABEL = 30
 
 # -----------------------------
@@ -156,7 +153,6 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
 # 서버 내부 백업(참고용) - 폭증 방지 기능 포함
 # -----------------------------
 def _prune_backups_for_label(label: str, suffix: str) -> None:
-    """label_YYYYMMDD_HHMMSS.csv 형태의 파일을 label별로 최근 N개만 남김"""
     try:
         prefix = f"{label}_"
         files = sorted(
@@ -185,8 +181,6 @@ def _latest_backup_path(label: str, suffix: str) -> Path | None:
         return None
 
 def _backup_file_if_exists(path: Path, label: str) -> None:
-    # 서버(Cloud) 내부 백업: 참고용(컨테이너 초기화 시 같이 사라질 수 있음)
-    # ✅ 개선: (1) 내용이 같으면 백업 생성 스킵 (2) label별 최근 N개만 유지
     try:
         if not path.exists() or path.stat().st_size == 0:
             return
@@ -197,9 +191,7 @@ def _backup_file_if_exists(path: Path, label: str) -> None:
         if last is not None:
             try:
                 if last.exists() and last.stat().st_size == len(cur_bytes):
-                    # 크기가 같으면 내용 비교(작은 파일이라 부담 적음)
                     if last.read_bytes() == cur_bytes:
-                        # 같은 내용이면 백업 파일 추가 생성하지 않음
                         return
             except Exception:
                 pass
@@ -260,7 +252,6 @@ def _restore_from_zip(zip_bytes: bytes) -> tuple[bool, str]:
             names = z.namelist()
             wanted = {arcname: path for arcname, path in ALL_DATA_FILES}
 
-            # 복원 전 현재본 백업(서버 참고용) - 폭증 방지 로직 포함
             stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
             for _, p in ALL_DATA_FILES:
                 if p.exists():
@@ -810,6 +801,18 @@ if "needs_pc_backup" not in st.session_state:
     st.session_state["needs_pc_backup_reason"] = ""
     st.session_state["needs_pc_backup_ts"] = ""
 
+# ✅ ZIP 파일명(타임스탬프)만 갱신하기 위한 nonce
+if "zip_nonce" not in st.session_state:
+    st.session_state["zip_nonce"] = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+
+def _fmt_mtime(p: Path) -> str:
+    try:
+        if not p.exists():
+            return "없음"
+        return pd.Timestamp(p.stat().st_mtime, unit="s").strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return "확인불가"
+
 with st.sidebar:
     st.markdown("## 💾 PC 백업(필수)")
     st.caption("Streamlit Cloud는 재시작 시 서버파일이 사라질 수 있어, **ZIP을 PC로 내려받아 보관**하는 방식이 안전합니다.")
@@ -819,8 +822,10 @@ with st.sidebar:
         ts = st.session_state.get("needs_pc_backup_ts", "")
         st.warning(f"방금 변경됨: {reason}\n\n➡️ **지금 ZIP 백업을 PC로 다운로드**하세요.\n\n(시간: {ts})")
 
+    # ✅ ZIP은 '현재 CSV를 읽어서' 매번 즉시 생성 (데이터를 절대 수정/삭제하지 않음)
     zip_bytes = _build_data_zip_bytes()
-    zip_name = f"moms_data_backup_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    zip_name = f"moms_data_backup_{st.session_state['zip_nonce']}.zip"
+
     st.download_button(
         "⬇️ 데이터 ZIP 백업 다운로드",
         data=zip_bytes,
@@ -835,21 +840,35 @@ with st.sidebar:
             st.session_state["needs_pc_backup"] = False
             st.session_state["needs_pc_backup_reason"] = ""
             st.session_state["needs_pc_backup_ts"] = ""
-            st.rerun()
+            # 버튼 클릭 자체로 rerun은 발생하므로, 추가 st.rerun() 불필요
     with c_done2:
+        # ✅ “새 ZIP 갱신”은 데이터에 손대지 않고, ZIP 파일명(시간)만 새로고침
         if st.button("🔁 새 ZIP 갱신", use_container_width=True):
-            st.rerun()
+            st.session_state["zip_nonce"] = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+
+    st.caption("※ ‘새 ZIP 갱신’은 **ZIP 파일명/시간만 바꾸는 기능**이며, CSV 데이터를 삭제/초기화하지 않습니다.")
 
     st.divider()
-    st.markdown("### ♻️ ZIP 업로드로 복원")
+    st.markdown("### ♻️ ZIP 업로드로 복원(주의: 덮어쓰기)")
+
+    confirm = st.checkbox("⚠️ 업로드한 ZIP으로 현재 데이터를 덮어쓰는 것을 이해했습니다.", value=False)
     up = st.file_uploader("ZIP 파일 선택", type=["zip"])
     if up is not None:
-        ok, msg = _restore_from_zip(up.read())
-        if ok:
-            st.success(msg)
-            st.rerun()
+        if not confirm:
+            st.error("복원 전 확인 체크가 필요합니다. (실수로 데이터 덮어쓰기 방지)")
         else:
-            st.error(msg)
+            ok, msg = _restore_from_zip(up.read())
+            if ok:
+                st.success(msg)
+                st.session_state["zip_nonce"] = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+                st.rerun()
+            else:
+                st.error(msg)
+
+    st.divider()
+    st.markdown("### 🧾 CSV 저장 상태(마지막 저장 시각)")
+    for name, p in ALL_DATA_FILES:
+        st.write(f"- {name}: **{_fmt_mtime(p)}**")
 
     st.divider()
     st.caption(f"서버 저장 경로(참고): {DATA_DIR}")
