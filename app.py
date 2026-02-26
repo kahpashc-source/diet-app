@@ -59,7 +59,7 @@ ALL_DATA_FILES = [
 MAX_SERVER_BACKUPS_PER_LABEL = 30
 
 # -----------------------------
-# 안전 문자열 처리
+# 유틸
 # -----------------------------
 def _safe_str(x) -> str:
     if x is None:
@@ -88,9 +88,6 @@ def _first_exists(*paths: Path) -> Path | None:
             pass
     return None
 
-# -----------------------------
-# 가나다 정렬 키
-# -----------------------------
 def _ko_sort_key(s: str) -> tuple:
     x = _safe_str(s)
     if not x:
@@ -112,7 +109,7 @@ def _unique_sorted(items: list[str]) -> list[str]:
     return out
 
 # -----------------------------
-# 원자적 CSV 저장 + 안전 읽기
+# CSV I/O
 # -----------------------------
 def _atomic_write_csv(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,7 +229,7 @@ def _delete_by_date(path: Path, columns: list[str], d: date) -> None:
     _mark_need_pc_backup(f"{path.name} 삭제")
 
 # -----------------------------
-# ZIP 백업/복원
+# ZIP 백업(PC 다운로드) / ZIP 복원(업로드)
 # -----------------------------
 def _build_data_zip_bytes() -> bytes:
     buf = io.BytesIO()
@@ -369,7 +366,7 @@ def _ensure_extracted_logo_if_needed() -> None:
         return
 
 # -----------------------------
-# 월별 데이터 map (표시용)
+# 월별 표시용 데이터
 # -----------------------------
 def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
     base = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
@@ -385,45 +382,41 @@ def _get_day_record_map(y: int, m: int) -> dict[int, dict[str, str]]:
 
     for _, r in base.iterrows():
         ds = _safe_str(r.get("date"))
-        if len(ds) < 2:
-            continue
-        try:
-            d = int(ds[-2:])
-        except Exception:
-            continue
-        out.setdefault(d, {})
-        out[d]["base"] = _safe_str(r.get("base_menu"))
+        if len(ds) >= 2:
+            try:
+                d = int(ds[-2:])
+                out.setdefault(d, {})
+                out[d]["base"] = _safe_str(r.get("base_menu"))
+            except Exception:
+                pass
 
     for _, r in change.iterrows():
         ds = _safe_str(r.get("date"))
-        if len(ds) < 2:
-            continue
-        try:
-            d = int(ds[-2:])
-        except Exception:
-            continue
-        out.setdefault(d, {})
-        out[d]["change"] = _safe_str(r.get("change_menu"))
+        if len(ds) >= 2:
+            try:
+                d = int(ds[-2:])
+                out.setdefault(d, {})
+                out[d]["change"] = _safe_str(r.get("change_menu"))
+            except Exception:
+                pass
 
     for _, r in delivery.iterrows():
         ds = _safe_str(r.get("date"))
-        if len(ds) < 2:
-            continue
-        try:
-            d = int(ds[-2:])
-        except Exception:
-            continue
-        out.setdefault(d, {})
-        v = _safe_str(r.get("delivery", "Y")).upper()
-        out[d]["delivery"] = "N" if v == "N" else "Y"
+        if len(ds) >= 2:
+            try:
+                d = int(ds[-2:])
+                out.setdefault(d, {})
+                v = _safe_str(r.get("delivery", "Y")).upper()
+                out[d]["delivery"] = "N" if v == "N" else "Y"
+            except Exception:
+                pass
 
     return out
 
 # -----------------------------
-# 날짜칸 클릭 → 그 자리에서 입력(popover)
+# 달력 칸 popover 편집
 # -----------------------------
 def _edit_popover(dt: date, idx_items: list[str]) -> None:
-    """달력 칸 내부 popover 내용"""
     key = dt.isoformat()
 
     base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
@@ -436,15 +429,15 @@ def _edit_popover(dt: date, idx_items: list[str]) -> None:
     if cur_deliv not in ["Y", "N"]:
         cur_deliv = "Y"
 
-    st.caption(f"선택: {key} ({WEEKDAY_FULL[dt.weekday()]})")
+    st.caption(f"{key} ({WEEKDAY_FULL[dt.weekday()]})")
 
-    # ✅ selectbox 자체에서 타이핑하면 메뉴 검색 가능(별도 검색창 없음)
     b_pick_key = f"p_{key}_b_pick"
     b_text_key = f"p_{key}_b_text"
     c_pick_key = f"p_{key}_c_pick"
     c_text_key = f"p_{key}_c_text"
     d_key = f"p_{key}_deliv"
 
+    # 초기값(처음 열 때만)
     if b_pick_key not in st.session_state:
         st.session_state[b_pick_key] = "(직접입력)"
     if b_text_key not in st.session_state:
@@ -457,16 +450,16 @@ def _edit_popover(dt: date, idx_items: list[str]) -> None:
         st.session_state[d_key] = "배달(Y)" if cur_deliv == "Y" else "배달불요(N)"
 
     st.markdown("**기본**")
-    b_pick = st.selectbox("기본(인덱스)", ["(직접입력)"] + idx_items, key=b_pick_key)
+    b_pick = st.selectbox("기본(인덱스) — 열고 타이핑 검색", ["(직접입력)"] + idx_items, key=b_pick_key)
     if b_pick != "(직접입력)":
         st.session_state[b_text_key] = b_pick
-    st.text_input("기본(입력)", key=b_text_key)
+    st.text_input("기본(입력)", key=b_text_key, placeholder="기본메뉴 입력")
 
     st.markdown("**변경(선택)**")
-    c_pick = st.selectbox("변경(인덱스)", ["(없음)"] + idx_items, key=c_pick_key)
+    c_pick = st.selectbox("변경(인덱스) — 열고 타이핑 검색", ["(없음)"] + idx_items, key=c_pick_key)
     if c_pick != "(없음)":
         st.session_state[c_text_key] = c_pick
-    st.text_input("변경(입력)", key=c_text_key)
+    st.text_input("변경(입력)", key=c_text_key, placeholder="변경메뉴 입력(없으면 비워도 됨)")
 
     st.markdown("**배달**")
     st.radio("배달", ["배달(Y)", "배달불요(N)"], key=d_key, horizontal=True)
@@ -474,23 +467,20 @@ def _edit_popover(dt: date, idx_items: list[str]) -> None:
     s1, s2 = st.columns(2)
     with s1:
         if st.button("💾 저장", key=f"p_{key}_save", use_container_width=True):
-            # 기본은 비어있으면 저장 안 함
             vb = _safe_str(st.session_state.get(b_text_key, ""))
             if vb:
                 _upsert_by_date(BASE_MENU_PATH, ["date", "base_menu"], dt, "base_menu", vb)
 
-            # 변경은 비어있으면 저장 안 함
             vc = _safe_str(st.session_state.get(c_text_key, ""))
-            if vc and vc != "(없음)":
+            if vc:
                 _upsert_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dt, "change_menu", vc)
             else:
-                # 비우려면 삭제
                 _delete_by_date(CHANGE_MENU_PATH, ["date", "change_menu"], dt)
 
             vd = "Y" if st.session_state.get(d_key, "배달(Y)").startswith("배달(Y)") else "N"
             _upsert_by_date(DELIVERY_PATH, ["date", "delivery"], dt, "delivery", vd)
 
-            # ✅ 저장 후 입력칸 비우기(빠른 입력)
+            # ✅ 저장 후 입력값 비우기(빠른 연속 입력)
             st.session_state[b_pick_key] = "(직접입력)"
             st.session_state[b_text_key] = ""
             st.session_state[c_pick_key] = "(없음)"
@@ -518,17 +508,13 @@ def _weekday_calendar_picker(y: int, m: int, selected: date, idx_items: list[str
             continue
         rows5.append(wd)
 
-    st.markdown("**📅 날짜 선택(평일만) — 날짜를 누르면 그 자리에서 입력창이 뜹니다**")
     sel_day = selected.day if (selected.year == y and selected.month == m) else None
-
-    # popover 사용 가능 여부(버전 차이 대비)
     has_popover = hasattr(st, "popover")
+    data_map = _get_day_record_map(y, m)
 
     hcols = st.columns(5)
     for i, w in enumerate(WEEKDAY_KR_WD):
         hcols[i].markdown(f"<div style='text-align:center;font-weight:900'>{w}</div>", unsafe_allow_html=True)
-
-    data_map = _get_day_record_map(y, m)
 
     for r, wk in enumerate(rows5):
         cols = st.columns(5)
@@ -556,10 +542,10 @@ def _weekday_calendar_picker(y: int, m: int, selected: date, idx_items: list[str
 
             if has_popover:
                 with cols[c].popover(label, use_container_width=True):
-                    st.session_state["selected_date"] = dt  # 선택 표시 유지
+                    st.session_state["selected_date"] = dt
                     _edit_popover(dt, idx_items)
             else:
-                # fallback: popover가 없으면 기존처럼 클릭 시 선택만(아래에서 입력)
+                # popover 없으면 (구버전) 클릭 시 선택만
                 if cols[c].button(label, key=f"d_{y}_{m}_{day}", use_container_width=True):
                     st.session_state["selected_date"] = dt
                     st.rerun()
@@ -567,7 +553,7 @@ def _weekday_calendar_picker(y: int, m: int, selected: date, idx_items: list[str
     return st.session_state.get("selected_date", selected)
 
 # -----------------------------
-# 포스터 HTML (기존 그대로)
+# 포스터 HTML
 # -----------------------------
 def _build_weekday_poster_html(
     y: int,
@@ -897,7 +883,7 @@ def _build_weekday_poster_html(
 
 
 # -----------------------------
-# 시작 시
+# 시작 시: 로고 추출(필요 시)
 # -----------------------------
 _ensure_extracted_logo_if_needed()
 
@@ -939,10 +925,11 @@ with st.sidebar:
             st.session_state["needs_pc_backup_ts"] = ""
     with c_done2:
         if st.button("🔁 새 ZIP 갱신", use_container_width=True):
+            # ZIP 파일명(시간)만 갱신 — 데이터는 절대 건드리지 않음
             st.session_state["zip_nonce"] = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
     st.divider()
-    st.markdown("### ♻️ ZIP 업로드로 복원")
+    st.markdown("### ♻️ ZIP 업로드로 복원(주의: 덮어쓰기)")
     confirm = st.checkbox("⚠️ 업로드한 ZIP으로 현재 데이터를 덮어쓰는 것을 이해했습니다.", value=False)
     up = st.file_uploader("ZIP 파일 선택", type=["zip"])
     if up is not None:
@@ -968,6 +955,9 @@ st.caption(f"저장 경로: {DATA_DIR}")
 
 colL, colR = st.columns([1.15, 1.0], vertical_alignment="top")
 
+# =============================
+# A) 입력/관리(왼쪽)
+# =============================
 with colL:
     st.subheader("1) 메뉴 인덱스 관리 (가나다 순 자동 정렬)")
     idx_items = _read_menu_index()
@@ -984,6 +974,7 @@ with colL:
                 st.rerun()
             else:
                 st.warning("메뉴명을 입력해 주세요.")
+
     with c2:
         del_item = st.selectbox("삭제할 메뉴 선택", ["(선택)"] + idx_items)
         if st.button("🗑️ 선택 메뉴 삭제", use_container_width=True):
@@ -994,7 +985,8 @@ with colL:
                 st.rerun()
 
     st.divider()
-    st.subheader("2) 월 선택")
+    st.subheader("2) 월/날짜 선택")
+    st.info("📌 날짜 칸을 누르면 **그 자리에서 3) 기본/변경/배달 입력창(popover)** 이 열립니다.\n\n※ 드롭다운은 열린 상태에서 **첫 글자 타이핑**으로 빠르게 찾을 수 있습니다.")
 
     today = date.today()
     y = st.selectbox("연도", list(range(today.year - 2, today.year + 4)), index=2)
@@ -1007,9 +999,12 @@ with colL:
     if sd.year != y or sd.month != m:
         st.session_state["selected_date"] = date(y, m, 1)
 
-    # ✅ 달력 칸에서 바로 입력(popover)
+    st.subheader("3) 빠른 입력 (날짜 클릭 → 즉시 입력)")
     _weekday_calendar_picker(y, m, st.session_state["selected_date"], idx_items)
 
+# =============================
+# B) 출력/전달(오른쪽)
+# =============================
 with colR:
     st.subheader("4) 포스터(출력용 1장) 미리보기")
 
@@ -1041,7 +1036,7 @@ with colR:
     components.html(poster_html, height=780, scrolling=True)
 
     st.divider()
-    st.subheader("5) 업체 전달용 파일 만들기")
+    st.subheader("5) 업체 전달용 파일 만들기(HTML 다운로드)")
 
     dl_name = _safe_filename(f"{title1}_{title2}_{title3}_{right_label}") + ".html"
     st.download_button(
