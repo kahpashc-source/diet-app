@@ -67,7 +67,6 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     return df[columns].astype(str).fillna("")
 
 def _write_csv(path: Path, df: pd.DataFrame) -> None:
-    # utf-8-sig: 엑셀 한글 깨짐 방지
     _atomic_write_text(path, df.to_csv(index=False), encoding="utf-8-sig")
 
 def _ensure_menu_index_sorted(df: pd.DataFrame) -> pd.DataFrame:
@@ -109,11 +108,14 @@ def delete_by_date_if_empty(df: pd.DataFrame, d: date, col: str) -> pd.DataFrame
     return df
 
 def set_delivery(df: pd.DataFrame, d: date, yn: str) -> pd.DataFrame:
+    """
+    delivery.csv는 '배달 필요(Y)'만 저장.
+    체크 해제(배달불요)면 해당 날짜 레코드 삭제.
+    """
     df = df.copy()
     ds = _iso(d)
     yn = "Y" if yn == "Y" else "N"
     if yn == "N":
-        # N은 기록 제거(간단히 유지). Y만 저장.
         df = df[df["date"] != ds].reset_index(drop=True)
         return df
 
@@ -132,12 +134,12 @@ def get_value(df: pd.DataFrame, d: date, col: str) -> str:
     return _nfc(hit.iloc[0][col])
 
 def get_delivery_flag(df: pd.DataFrame, d: date) -> str:
-    # 기록이 있으면 Y, 없으면 N(=배달불요로 표시)
+    # 레코드가 있으면 Y(배달 필요), 없으면 N(배달불요)
     ds = _iso(d)
     return "Y" if not df[df["date"] == ds].empty else "N"
 
 # -----------------------------
-# ZIP 백업/복원 (핵심: DATA_DIR로 강제 덮어쓰기)
+# ZIP 백업/복원 (DATA_DIR로 강제 덮어쓰기)
 # -----------------------------
 TARGET_FILES = {
     "base_menu.csv": BASE_MENU_PATH,
@@ -157,7 +159,6 @@ def make_backup_zip_bytes() -> bytes:
 def restore_from_zip(uploaded) -> tuple[bool, str]:
     if uploaded is None:
         return False, "ZIP 파일이 없습니다."
-
     raw = uploaded.getvalue()
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
@@ -168,7 +169,7 @@ def restore_from_zip(uploaded) -> tuple[bool, str]:
     for info in zf.infolist():
         if info.is_dir():
             continue
-        name_only = Path(info.filename).name  # ✅ 폴더 경로 제거
+        name_only = Path(info.filename).name  # 폴더 경로 제거
         if name_only in TARGET_FILES:
             found[name_only] = info
 
@@ -177,8 +178,7 @@ def restore_from_zip(uploaded) -> tuple[bool, str]:
         return False, "ZIP 안에 필요한 파일이 없습니다: " + ", ".join(missing)
 
     for fname, info in found.items():
-        data = zf.read(info)
-        _atomic_write_bytes(TARGET_FILES[fname], data)
+        _atomic_write_bytes(TARGET_FILES[fname], zf.read(info))
 
     return True, "복원 완료: data 폴더의 CSV를 강제로 교체했습니다."
 
@@ -195,7 +195,7 @@ def debug_data_status():
                 shape = f"읽기 오류: {e}"
         else:
             size, mtime, shape = 0, "", "없음"
-        rows.append({"파일": fname, "경로": str(path), "수정시각": mtime, "크기(bytes)": size, "행x열": shape})
+        rows.append({"파일": fname, "수정시각": mtime, "크기(bytes)": size, "행x열": shape, "경로": str(path)})
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
 # -----------------------------
@@ -213,11 +213,10 @@ if "last_clicked" not in st.session_state:
 # -----------------------------
 st.title("맘스락 식단 변경 프로그램")
 
-# 로드
 base_df, change_df, delivery_df, idx_df = load_all()
 
 # -----------------------------
-# 사이드바: 메뉴 인덱스 관리 + 백업/복원
+# 사이드바
 # -----------------------------
 with st.sidebar:
     st.header("1) 메뉴 인덱스 관리")
@@ -249,17 +248,14 @@ with st.sidebar:
 
     st.divider()
     st.header("2) 백업/복원(ZIP)")
-
-    st.caption("현재 앱이 읽는 데이터 위치")
+    st.caption("현재 앱 데이터 폴더")
     st.code(str(DATA_DIR), language="text")
-
-    st.caption("현재 CSV 상태(수정시각/행수 확인)")
+    st.caption("CSV 상태(수정시각/행수)")
     debug_data_status()
 
-    backup_bytes = make_backup_zip_bytes()
     st.download_button(
         "📦 데이터 ZIP 다운로드",
-        data=backup_bytes,
+        data=make_backup_zip_bytes(),
         file_name="diet_data_backup.zip",
         mime="application/zip",
         use_container_width=True,
@@ -275,7 +271,6 @@ with st.sidebar:
 # 월 선택
 # -----------------------------
 st.subheader("월 선택")
-
 y, m = st.session_state.ym
 years = list(range(2024, 2036))
 months = list(range(1, 13))
@@ -294,32 +289,36 @@ with cNow:
 st.session_state.ym = (y, m)
 
 # -----------------------------
-# 달력 렌더
+# 달력(이전 UI 복귀: 칸 안에 기본/변경/배달불요 표시)
 # -----------------------------
 def cell_label(d: date) -> str:
     base = get_value(base_df, d, "base_menu")
     change = get_value(change_df, d, "change_menu")
-    delivery = get_delivery_flag(delivery_df, d)
+    delivery = get_delivery_flag(delivery_df, d)  # Y=배달, N=배달불요
 
-    marks = []
-    if delivery != "Y":
-        marks.append("🚫")
-    if change:
-        marks.append("🔁")
-
-    top = f"{d.day:02d} " + (" ".join(marks) if marks else "")
-    lines = [top]
+    lines = []
+    lines.append(f"{d.day:02d}")
+    if base:
+        lines.append(f"기본: {base}")
+    else:
+        lines.append("기본:")  # 빈칸도 라인 유지(이전처럼)
 
     if change:
         lines.append(f"변경: {change}")
-    elif base:
-        lines.append(f"기본: {base}")
+    else:
+        lines.append("변경:")
+
+    if delivery == "Y":
+        lines.append("배달: O")
+    else:
+        lines.append("배달: X(불요)")
 
     return "\n".join(lines)
 
 def open_editor(d: date):
     st.session_state.last_clicked = _iso(d)
 
+# 요일 헤더
 weekdays = ["월", "화", "수", "목", "금", "토", "일"]
 hcols = st.columns(7)
 for i, w in enumerate(weekdays):
@@ -328,7 +327,7 @@ for i, w in enumerate(weekdays):
 cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
 month_days = list(cal.itermonthdates(y, m))
 
-# 6주(42칸)로 고정
+# 6주(42칸) 고정
 if len(month_days) < 42:
     last = month_days[-1]
     month_days = month_days + [last + timedelta(days=i) for i in range(1, 42 - len(month_days) + 1)]
@@ -340,6 +339,7 @@ for row in range(6):
     for col in range(7):
         d = month_days[row * 7 + col]
         in_month = (d.month == m)
+
         label = cell_label(d) if in_month else ""
         disabled = not in_month
 
@@ -355,7 +355,6 @@ if clicked_iso:
 
     @st.dialog("식단 입력(저장 후 달력으로 복귀)")
     def edit_dialog(d: date):
-        # ✅ 여기서는 nonlocal/global 없이, 항상 최신 파일을 다시 읽어서 저장합니다.
         base_df2, change_df2, delivery_df2, idx_df2 = load_all()
 
         st.write(f"📅 선택 날짜: **{d.year}-{d.month:02d}-{d.day:02d}**")
@@ -369,24 +368,24 @@ if clicked_iso:
         st.divider()
 
         idx_list = idx_df2["name"].tolist() if not idx_df2.empty else []
-        idx_with_blank = ["(직접입력)"] + idx_list
+        base_choices = ["(직접입력)"] + idx_list
+        change_choices = ["(없음)"] + idx_list + ["(직접입력)"]
 
         st.markdown("**기본 메뉴**")
-        base_mode = st.selectbox("선택", idx_with_blank, index=0, key="base_mode")
-        base_text = st.text_input("기본 메뉴(직접 입력)", value=current_base, key="base_text")
+        base_mode = st.selectbox("기본 선택", base_choices, index=0, key="base_mode")
+        base_text = st.text_input("기본(직접 입력)", value=current_base, key="base_text")
         if base_mode != "(직접입력)":
             base_text = base_mode
 
         st.markdown("**변경 메뉴**")
-        change_mode = st.selectbox("선택 ", ["(없음)"] + idx_list + ["(직접입력)"], index=0, key="change_mode")
-        change_text = st.text_input("변경 메뉴(직접 입력)", value=current_change, key="change_text")
+        change_mode = st.selectbox("변경 선택", change_choices, index=0, key="change_mode")
+        change_text = st.text_input("변경(직접 입력)", value=current_change, key="change_text")
         if change_mode == "(없음)":
             change_text = ""
         elif change_mode != "(직접입력)":
             change_text = change_mode
 
         st.divider()
-
         c1, c2 = st.columns(2)
         with c1:
             if st.button("💾 저장", type="primary", use_container_width=True):
@@ -404,23 +403,19 @@ if clicked_iso:
 
                 st.session_state.last_clicked = None
                 st.rerun()
-
         with c2:
             if st.button("닫기(저장 안함)", use_container_width=True):
                 st.session_state.last_clicked = None
                 st.rerun()
 
-        st.caption("※ 인덱스에 없는 메뉴는 직접 입력 후, 필요하면 사이드바에서 인덱스에 추가하세요.")
-
     edit_dialog(clicked_date)
 
 # -----------------------------
-# 하단: 월간 요약(업체 전달용 텍스트)
+# 하단: 월간 요약(업체 전달용)
 # -----------------------------
 st.divider()
 st.subheader("업체 전달용 요약(월간)")
 
-# 월 범위
 last_day = date(y, m, calendar.monthrange(y, m)[1])
 all_days = [date(y, m, d) for d in range(1, last_day.day + 1)]
 
@@ -428,26 +423,21 @@ lines: list[str] = []
 lines.append("동약협회입니다.")
 lines.append(f"{y}년 {m:02d}월 도시락 변경/배달불요 내역입니다.")
 
-# 배달불요
 no_delivery = [d for d in all_days if get_delivery_flag(delivery_df, d) != "Y"]
 if no_delivery:
     lines.append("")
-    lines.append("🚫【배달불요】")
+    lines.append("【배달불요】")
     for d in no_delivery:
         wd = ["월", "화", "수", "목", "금", "토", "일"][d.weekday()]
         lines.append(f"▶ {m:02d}/{d.day:02d}({wd}) : 배달불요")
 
-# 변경
 changed = [d for d in all_days if get_value(change_df, d, "change_menu") != ""]
 if changed:
     lines.append("")
-    lines.append("🔁【변경메뉴】")
+    lines.append("【변경메뉴】")
     for d in changed:
         wd = ["월", "화", "수", "목", "금", "토", "일"][d.weekday()]
         cm = get_value(change_df, d, "change_menu")
         lines.append(f"▶ {m:02d}/{d.day:02d}({wd}) : {cm}")
 
-summary = "\n".join(lines)
-st.text_area("복사해서 문자/카톡에 붙여넣기", summary, height=220)
-
-st.caption("정확도: 높음 — 방금 오류는 nonlocal 사용 위치 문제였고, 본 교체본은 nonlocal을 제거하여 동일 오류가 재발하지 않습니다.")
+st.text_area("복사해서 문자/카톡에 붙여넣기", "\n".join(lines), height=220)
