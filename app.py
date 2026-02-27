@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import calendar
 import io
 import zipfile
@@ -60,7 +60,6 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     try:
         df = pd.read_csv(path, dtype=str).fillna("")
     except Exception:
-        # 깨진 파일이면 빈 프레임으로 시작
         return pd.DataFrame(columns=columns)
     for c in columns:
         if c not in df.columns:
@@ -76,7 +75,7 @@ def _ensure_menu_index_sorted(df: pd.DataFrame) -> pd.DataFrame:
     df["name"] = df["name"].map(_nfc)
     df = df[df["name"] != ""]
     df = df.drop_duplicates(subset=["name"])
-    df = df.sort_values("name", kind="mergesort").reset_index(drop=True)  # 가나다순(유니코드 순)
+    df = df.sort_values("name", kind="mergesort").reset_index(drop=True)
     return df
 
 def load_all():
@@ -101,9 +100,10 @@ def upsert_by_date(df: pd.DataFrame, d: date, col: str, value: str) -> pd.DataFr
 def delete_by_date_if_empty(df: pd.DataFrame, d: date, col: str) -> pd.DataFrame:
     df = df.copy()
     ds = _iso(d)
-    if not (df["date"] == ds).any():
+    hit = df[df["date"] == ds]
+    if hit.empty:
         return df
-    v = _nfc(df.loc[df["date"] == ds, col].iloc[0])
+    v = _nfc(hit.iloc[0][col])
     if v == "":
         df = df[df["date"] != ds].reset_index(drop=True)
     return df
@@ -112,13 +112,16 @@ def set_delivery(df: pd.DataFrame, d: date, yn: str) -> pd.DataFrame:
     df = df.copy()
     ds = _iso(d)
     yn = "Y" if yn == "Y" else "N"
+    if yn == "N":
+        # N은 기록 제거(간단히 유지). Y만 저장.
+        df = df[df["date"] != ds].reset_index(drop=True)
+        return df
+
     if (df["date"] == ds).any():
-        df.loc[df["date"] == ds, "delivery"] = yn
+        df.loc[df["date"] == ds, "delivery"] = "Y"
     else:
-        df = pd.concat([df, pd.DataFrame([{"date": ds, "delivery": yn}])], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame([{"date": ds, "delivery": "Y"}])], ignore_index=True)
     df = df.sort_values("date").reset_index(drop=True)
-    # N이면 아예 기록 제거(간단히 유지하고 싶으면 주석 처리)
-    df = df[~((df["date"] == ds) & (df["delivery"] == "N"))].reset_index(drop=True)
     return df
 
 def get_value(df: pd.DataFrame, d: date, col: str) -> str:
@@ -129,11 +132,9 @@ def get_value(df: pd.DataFrame, d: date, col: str) -> str:
     return _nfc(hit.iloc[0][col])
 
 def get_delivery_flag(df: pd.DataFrame, d: date) -> str:
+    # 기록이 있으면 Y, 없으면 N(=배달불요로 표시)
     ds = _iso(d)
-    hit = df[df["date"] == ds]
-    if hit.empty:
-        return "N"
-    return "Y" if hit.iloc[0].get("delivery", "N") == "Y" else "N"
+    return "Y" if not df[df["date"] == ds].empty else "N"
 
 # -----------------------------
 # ZIP 백업/복원 (핵심: DATA_DIR로 강제 덮어쓰기)
@@ -156,18 +157,18 @@ def make_backup_zip_bytes() -> bytes:
 def restore_from_zip(uploaded) -> tuple[bool, str]:
     if uploaded is None:
         return False, "ZIP 파일이 없습니다."
+
     raw = uploaded.getvalue()
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
     except Exception as e:
         return False, f"ZIP 읽기 오류: {e}"
 
-    # ZIP 안에서 파일명만 보고 추출(폴더 중첩도 자동 처리)
     found: dict[str, zipfile.ZipInfo] = {}
     for info in zf.infolist():
         if info.is_dir():
             continue
-        name_only = Path(info.filename).name
+        name_only = Path(info.filename).name  # ✅ 폴더 경로 제거
         if name_only in TARGET_FILES:
             found[name_only] = info
 
@@ -179,7 +180,7 @@ def restore_from_zip(uploaded) -> tuple[bool, str]:
         data = zf.read(info)
         _atomic_write_bytes(TARGET_FILES[fname], data)
 
-    return True, "복원 완료(강제 덮어쓰기): data 폴더의 CSV를 교체했습니다."
+    return True, "복원 완료: data 폴더의 CSV를 강제로 교체했습니다."
 
 def debug_data_status():
     rows = []
@@ -267,10 +268,7 @@ with st.sidebar:
     up = st.file_uploader("ZIP 업로드(복원)", type=["zip"])
     if st.button("ZIP에서 복원(강제 덮어쓰기)", type="primary", use_container_width=True):
         ok, msg = restore_from_zip(up)
-        if ok:
-            st.success(msg)
-        else:
-            st.error(msg)
+        st.success(msg) if ok else st.error(msg)
         st.rerun()
 
 # -----------------------------
@@ -303,13 +301,8 @@ def cell_label(d: date) -> str:
     change = get_value(change_df, d, "change_menu")
     delivery = get_delivery_flag(delivery_df, d)
 
-    # 표시 규칙(간결/시각구분)
-    # - 변경 있으면 🔁
-    # - 배달불요면 🚫
     marks = []
-    if delivery == "Y":
-        pass
-    else:
+    if delivery != "Y":
         marks.append("🚫")
     if change:
         marks.append("🔁")
@@ -327,17 +320,20 @@ def cell_label(d: date) -> str:
 def open_editor(d: date):
     st.session_state.last_clicked = _iso(d)
 
-# 요일 헤더
 weekdays = ["월", "화", "수", "목", "금", "토", "일"]
 hcols = st.columns(7)
 for i, w in enumerate(weekdays):
     hcols[i].markdown(f"**{w}**")
 
-cal = calendar.Calendar(firstweekday=0)  # 월요일 시작(0)
+cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
 month_days = list(cal.itermonthdates(y, m))
 
-# 6주(최대 42칸)로 고정
-month_days = month_days[:42] if len(month_days) >= 42 else month_days + [month_days[-1] + pd.Timedelta(days=i+1) for i in range(42 - len(month_days))]  # type: ignore
+# 6주(42칸)로 고정
+if len(month_days) < 42:
+    last = month_days[-1]
+    month_days = month_days + [last + timedelta(days=i) for i in range(1, 42 - len(month_days) + 1)]
+else:
+    month_days = month_days[:42]
 
 for row in range(6):
     cols = st.columns(7)
@@ -347,7 +343,6 @@ for row in range(6):
         label = cell_label(d) if in_month else ""
         disabled = not in_month
 
-        # 버튼(날짜 클릭 → 입력창)
         if cols[col].button(label if label else " ", key=f"daybtn-{y}-{m}-{row}-{col}", disabled=disabled, use_container_width=True):
             open_editor(d)
 
@@ -360,24 +355,20 @@ if clicked_iso:
 
     @st.dialog("식단 입력(저장 후 달력으로 복귀)")
     def edit_dialog(d: date):
-        nonlocal base_df, change_df, delivery_df, idx_df
-
-        # 최신 로드(다른 PC/세션 대비)
-        base_df, change_df, delivery_df, idx_df = load_all()
+        # ✅ 여기서는 nonlocal/global 없이, 항상 최신 파일을 다시 읽어서 저장합니다.
+        base_df2, change_df2, delivery_df2, idx_df2 = load_all()
 
         st.write(f"📅 선택 날짜: **{d.year}-{d.month:02d}-{d.day:02d}**")
 
-        current_base = get_value(base_df, d, "base_menu")
-        current_change = get_value(change_df, d, "change_menu")
-        current_delivery = get_delivery_flag(delivery_df, d)  # Y면 배달, 없으면 배달불요로 취급(기록 없음)
+        current_base = get_value(base_df2, d, "base_menu")
+        current_change = get_value(change_df2, d, "change_menu")
+        current_delivery = get_delivery_flag(delivery_df2, d)
 
-        # 배달 여부
         delivery_ok = st.checkbox("배달 필요(체크 해제 시 배달불요)", value=(current_delivery == "Y"))
 
         st.divider()
 
-        # 인덱스 목록
-        idx_list = idx_df["name"].tolist() if not idx_df.empty else []
+        idx_list = idx_df2["name"].tolist() if not idx_df2.empty else []
         idx_with_blank = ["(직접입력)"] + idx_list
 
         st.markdown("**기본 메뉴**")
@@ -399,20 +390,19 @@ if clicked_iso:
         c1, c2 = st.columns(2)
         with c1:
             if st.button("💾 저장", type="primary", use_container_width=True):
-                # 저장
-                base_df2 = upsert_by_date(base_df, d, "base_menu", base_text)
-                base_df2 = delete_by_date_if_empty(base_df2, d, "base_menu")
+                base_df3 = upsert_by_date(base_df2, d, "base_menu", base_text)
+                base_df3 = delete_by_date_if_empty(base_df3, d, "base_menu")
 
-                change_df2 = upsert_by_date(change_df, d, "change_menu", change_text)
-                change_df2 = delete_by_date_if_empty(change_df2, d, "change_menu")
+                change_df3 = upsert_by_date(change_df2, d, "change_menu", change_text)
+                change_df3 = delete_by_date_if_empty(change_df3, d, "change_menu")
 
-                delivery_df2 = set_delivery(delivery_df, d, "Y" if delivery_ok else "N")
+                delivery_df3 = set_delivery(delivery_df2, d, "Y" if delivery_ok else "N")
 
-                _write_csv(BASE_MENU_PATH, base_df2)
-                _write_csv(CHANGE_MENU_PATH, change_df2)
-                _write_csv(DELIVERY_PATH, delivery_df2)
+                _write_csv(BASE_MENU_PATH, base_df3)
+                _write_csv(CHANGE_MENU_PATH, change_df3)
+                _write_csv(DELIVERY_PATH, delivery_df3)
 
-                st.session_state.last_clicked = None  # ✅ 저장 후 창 닫고 달력으로
+                st.session_state.last_clicked = None
                 st.rerun()
 
         with c2:
@@ -431,12 +421,11 @@ st.divider()
 st.subheader("업체 전달용 요약(월간)")
 
 # 월 범위
-first_day = date(y, m, 1)
 last_day = date(y, m, calendar.monthrange(y, m)[1])
 all_days = [date(y, m, d) for d in range(1, last_day.day + 1)]
 
-lines = []
-lines.append(f"동약협회입니다.")
+lines: list[str] = []
+lines.append("동약협회입니다.")
 lines.append(f"{y}년 {m:02d}월 도시락 변경/배달불요 내역입니다.")
 
 # 배달불요
@@ -445,7 +434,8 @@ if no_delivery:
     lines.append("")
     lines.append("🚫【배달불요】")
     for d in no_delivery:
-        lines.append(f"▶ {m:02d}/{d.day:02d}({['월','화','수','목','금','토','일'][d.weekday()]}) : 배달불요")
+        wd = ["월", "화", "수", "목", "금", "토", "일"][d.weekday()]
+        lines.append(f"▶ {m:02d}/{d.day:02d}({wd}) : 배달불요")
 
 # 변경
 changed = [d for d in all_days if get_value(change_df, d, "change_menu") != ""]
@@ -453,10 +443,11 @@ if changed:
     lines.append("")
     lines.append("🔁【변경메뉴】")
     for d in changed:
+        wd = ["월", "화", "수", "목", "금", "토", "일"][d.weekday()]
         cm = get_value(change_df, d, "change_menu")
-        lines.append(f"▶ {m:02d}/{d.day:02d}({['월','화','수','목','금','토','일'][d.weekday()]}) : {cm}")
+        lines.append(f"▶ {m:02d}/{d.day:02d}({wd}) : {cm}")
 
 summary = "\n".join(lines)
 st.text_area("복사해서 문자/카톡에 붙여넣기", summary, height=220)
 
-st.caption("정확도: ZIP 복원 문제는 '경로/덮어쓰기/클라우드 비영구 저장'이 대부분입니다. 이 버전은 ZIP을 어떤 구조로 올려도 파일명 기준으로 data 폴더에 강제 덮어쓰기 하도록 처리했습니다.")
+st.caption("정확도: 높음 — 방금 오류는 nonlocal 사용 위치 문제였고, 본 교체본은 nonlocal을 제거하여 동일 오류가 재발하지 않습니다.")
