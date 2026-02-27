@@ -252,18 +252,18 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.header("3) 포스터 로고")
-    st.caption("포스터 상단 좌/우 로고를 업로드하면 그림에 반영됩니다.")
-    moms_logo_up = st.file_uploader("왼쪽(MOMS) 로고 업로드", type=["png", "jpg", "jpeg", "webp"], key="momslogo")
-    kapma_logo_up = st.file_uploader("오른쪽(동약협회) 로고 업로드", type=["png", "jpg", "jpeg", "webp"], key="kapmalogo")
+    st.header("3) 로고 업로드(이전 스타일)")
+    st.caption("MOMS 로고 / 동약협회(그릇) 로고를 각각 업로드하세요.")
+    moms_logo_up = st.file_uploader("MOMS 로고 업로드", type=["png", "jpg", "jpeg", "webp"], key="momslogo")
+    bowl_logo_up = st.file_uploader("동약협회(그릇) 로고 업로드", type=["png", "jpg", "jpeg", "webp"], key="bowllogo")
 
 moms_logo_uri = file_to_data_uri(st.session_state.get("momslogo"))
-kapma_logo_uri = file_to_data_uri(st.session_state.get("kapmalogo"))
+bowl_logo_uri = file_to_data_uri(st.session_state.get("bowllogo"))
 
 # -----------------------------
-# 월 선택
+# 월 선택 (토/일 제외하여 표시)
 # -----------------------------
-st.subheader("월 선택")
+st.subheader("월 선택(월~금만 표시)")
 y, m = st.session_state.ym
 years = list(range(2024, 2036))
 months = list(range(1, 13))
@@ -281,19 +281,16 @@ with cNow:
 st.session_state.ym = (y, m)
 
 # -----------------------------
-# 달력(입력용)
-# - 기본: 흰색
-# - 변경: 노랑 계열 + "변경" 뱃지
-# - 배달불요: 핑크 계열 + "배달불요" 뱃지
+# 달력(입력용) - 월~금만 (토/일 제외)
+# - 변경 메뉴 강조: 텍스트에 '변경:' 포함 + 버튼 배경 노랑
+# - 배달불요 강조: '배달불요' 포함 + 버튼 배경 핑크
 # -----------------------------
 st.caption("※ 날짜 클릭 → 입력창(저장 시 달력으로 복귀)")
 
-def cell_label_input(d: date) -> str:
+def label_monfri(d: date) -> str:
     base = get_value(base_df, d, "base_menu")
     change = get_value(change_df, d, "change_menu")
     delivery = get_delivery_flag(delivery_df, d)
-
-    # 버튼 텍스트는 간결하게(칸 안 잘림 방지)
     parts = [f"{d.day:02d}"]
     if delivery != "Y":
         parts.append("배달불요")
@@ -307,80 +304,67 @@ def cell_label_input(d: date) -> str:
 def open_editor(d: date):
     st.session_state.last_clicked = _iso(d)
 
-weekdays = ["월", "화", "수", "목", "금", "토", "일"]
-hcols = st.columns(7)
-for i, w in enumerate(weekdays):
+# 요일 헤더(월~금만)
+weekdays_monfri = ["월", "화", "수", "목", "금"]
+hcols = st.columns(5)
+for i, w in enumerate(weekdays_monfri):
     hcols[i].markdown(f"**{w}**")
 
 cal = calendar.Calendar(firstweekday=0)
-month_days = list(cal.itermonthdates(y, m))
-if len(month_days) < 42:
-    last = month_days[-1]
-    month_days = month_days + [last + timedelta(days=i) for i in range(1, 42 - len(month_days) + 1)]
-else:
-    month_days = month_days[:42]
+days = list(cal.itermonthdates(y, m))
+weeks = [days[i:i+7] for i in range(0, len(days), 7)]
 
-# ✅ 버튼별 클래스 적용을 위해 HTML+JS로 스타일 주입 (Streamlit 버튼 자체는 클래스 부여가 어려움)
-# - workaround: 각 버튼 key를 이용해 data-testid 요소를 찾아 근처 button에 스타일을 적용
-def inject_calendar_style(keys_changed: set[str], keys_nodlv: set[str]):
-    # JS에서 Streamlit이 만든 버튼들을 찾아 스타일을 덧씌웁니다.
-    js = f"""
+# 월~금만 남긴 주 리스트
+weeks_monfri = []
+for w in weeks:
+    wk = w[:5]
+    if not any(d.month == m for d in wk):
+        continue
+    weeks_monfri.append(wk)
+
+# 스타일 주입(텍스트 기반)
+def inject_style_monfri():
+    js = """
     <script>
-    const changed = new Set({list(keys_changed)});
-    const nodlv = new Set({list(keys_nodlv)});
+      function apply() {
+        const buttons = window.parent.document.querySelectorAll('button');
+        buttons.forEach(b => {
+          const t = (b.innerText || "").trim();
+          if (!t) return;
 
-    function apply() {{
-      const all = window.parent.document.querySelectorAll('button[kind="secondary"]');
-      all.forEach(btn => {{
-        const k = btn.getAttribute("data-testid") || "";
-      }});
-      // Streamlit은 버튼에 key를 직접 안 박습니다.
-      // 따라서, 라벨 텍스트의 '변경:' / '배달불요'로 2차 판별해 적용합니다(안정적).
-      const buttons = window.parent.document.querySelectorAll('button');
-      buttons.forEach(b => {{
-        const t = (b.innerText || "").trim();
-        if (!t) return;
-        if (t.includes("배달불요")) {{
-          b.style.background = "rgba(255, 235, 238, 1)";
-          b.style.border = "2px solid rgba(216, 65, 90, 0.65)";
-          b.style.borderRadius = "14px";
-        }}
-        if (t.includes("변경:") || t.includes("변경:") || t.includes("변경:")) {{
-          b.style.background = "rgba(255, 248, 225, 1)";
-          b.style.border = "2px solid rgba(222, 150, 35, 0.70)";
-          b.style.borderRadius = "14px";
-        }}
-      }});
-    }}
-    setTimeout(apply, 50);
-    setTimeout(apply, 250);
+          // 월 선택 영역 등 다른 버튼까지 바뀌는 것을 최소화하기 위해
+          // "변경:" 또는 "배달불요"가 들어가는 버튼만 스타일 적용
+          if (t.includes("배달불요")) {
+            b.style.background = "rgba(255, 235, 238, 1)";
+            b.style.border = "2px solid rgba(216, 65, 90, 0.65)";
+            b.style.borderRadius = "14px";
+            b.style.fontWeight = "900";
+          }
+          if (t.includes("변경:")) {
+            b.style.background = "rgba(255, 248, 225, 1)";
+            b.style.border = "2px solid rgba(222, 150, 35, 0.70)";
+            b.style.borderRadius = "14px";
+            b.style.fontWeight = "900";
+          }
+        });
+      }
+      setTimeout(apply, 60);
+      setTimeout(apply, 260);
     </script>
     """
     components.html(js, height=0)
 
-keys_changed, keys_nodlv = set(), set()
-
-for row in range(6):
-    cols = st.columns(7)
-    for col in range(7):
-        d = month_days[row * 7 + col]
+for r, wk in enumerate(weeks_monfri):
+    cols = st.columns(5)
+    for c, d in enumerate(wk):
         in_month = (d.month == m)
         disabled = not in_month
-        label = cell_label_input(d) if in_month else " "
-
-        # key 기록(포스터는 별도라 달력은 텍스트 기반 스타일링 사용)
-        if in_month:
-            if get_value(change_df, d, "change_menu"):
-                keys_changed.add(f"daybtn-{y}-{m}-{row}-{col}")
-            if get_delivery_flag(delivery_df, d) != "Y":
-                keys_nodlv.add(f"daybtn-{y}-{m}-{row}-{col}")
-
-        if cols[col].button(label, key=f"daybtn-{y}-{m}-{row}-{col}", disabled=disabled, use_container_width=True):
+        label = label_monfri(d) if in_month else " "
+        if cols[c].button(label, key=f"mf-{y}-{m}-{r}-{c}", disabled=disabled, use_container_width=True):
             if in_month:
                 open_editor(d)
 
-# 달력 색상 적용(텍스트 기반)
-inject_calendar_style(keys_changed, keys_nodlv)
+inject_style_monfri()
 
 # -----------------------------
 # 날짜 편집 Dialog
@@ -447,7 +431,7 @@ if clicked_iso:
     edit_dialog(clicked_date)
 
 # -----------------------------
-# 포스터(1장) - 예시처럼 월~금만 / 색상 구분 / 로고 포함 / PNG 저장
+# 포스터(1장) - 월~금 / 로고 박스(로고 + 텍스트) / 색상 구분 / PNG 저장
 # -----------------------------
 st.divider()
 st.header("포스터(출력용 1장) 미리보기 / PNG 저장")
@@ -468,7 +452,7 @@ def build_weeks_mon_fri(year: int, month: int):
     weeks = [days[i:i+7] for i in range(0, len(days), 7)]
     rows = []
     for w in weeks:
-        wk = w[:5]  # 월~금
+        wk = w[:5]
         if not any(d.month == month for d in wk):
             continue
         rows.append(wk)
@@ -480,14 +464,23 @@ rows = build_weeks_mon_fri(y, m)
 poster_filename = f"맘스락_{y}_{m:02d}_식단변경.png"
 title_html = f"맘스락 {m:02d}월<br/>식단 변경"
 
-left_logo_html = (
-    f'<img class="logo-img" src="{moms_logo_uri}" />'
-    if moms_logo_uri else '<div class="logo-text"><b>MOMS</b></div>'
-)
-right_logo_html = (
-    f'<img class="logo-img" src="{kapma_logo_uri}" />'
-    if kapma_logo_uri else '<div class="logo-text"><b>동약협회</b></div>'
-)
+# ✅ 로고 박스: (로고) + 텍스트(예: MOMS / 동약협회)
+left_logo_html = f"""
+<div class="logo-inner">
+  <div class="logo-mark">
+    {f'<img src="{moms_logo_uri}" />' if moms_logo_uri else '<div class="placeholder">M</div>'}
+  </div>
+  <div class="logo-name">MOMS</div>
+</div>
+"""
+right_logo_html = f"""
+<div class="logo-inner">
+  <div class="logo-mark">
+    {f'<img src="{bowl_logo_uri}" />' if bowl_logo_uri else '<div class="placeholder">🍚</div>'}
+  </div>
+  <div class="logo-name">동약협회</div>
+</div>
+"""
 
 cells_html = ""
 for wk in rows:
@@ -511,7 +504,6 @@ for wk in rows:
             badges.append('<span class="badge changed">변경</span>')
 
         wd = wd_kr[d.weekday()]
-        # 메뉴 표시: 기본은 검정 / 변경은 빨강 굵게
         menu_main = base
         change_block = f'<div class="change">{change}</div>' if change else ""
 
@@ -573,15 +565,41 @@ poster_html = f"""
     margin-bottom: 10px;
   }}
   .logo-box {{
-    width: 250px; height: 86px;
-    border: 1.5px solid rgba(0,0,0,0.15);
+    width: 260px; height: 92px;
+    border: 1.6px solid rgba(0,0,0,0.18);
     border-radius: 18px;
     display:flex; align-items:center; justify-content:center;
     overflow:hidden;
     background:#fff;
   }}
-  .logo-img {{ max-width: 92%; max-height: 92%; object-fit: contain; }}
-  .logo-text {{ font-size: 30px; color:#111; }}
+  .logo-inner {{
+    display:flex; align-items:center; gap: 12px;
+  }}
+  .logo-mark {{
+    width: 56px; height: 56px;
+    border-radius: 14px;
+    display:flex; align-items:center; justify-content:center;
+    background: rgba(0,0,0,0.04);
+    border: 1.2px solid rgba(0,0,0,0.12);
+    overflow:hidden;
+  }}
+  .logo-mark img {{
+    max-width: 90%;
+    max-height: 90%;
+    object-fit: contain;
+  }}
+  .placeholder {{
+    font-size: 24px;
+    font-weight: 950;
+    color: rgba(0,0,0,0.45);
+  }}
+  .logo-name {{
+    font-size: 28px;
+    font-weight: 950;
+    color:#111;
+    letter-spacing: -0.5px;
+  }}
+
   .title {{
     flex: 1;
     text-align:center;
@@ -755,34 +773,3 @@ poster_html = f"""
 """
 
 components.html(poster_html, height=980, scrolling=True)
-
-# -----------------------------
-# 하단: 업체 전달용 텍스트(옵션)
-# -----------------------------
-st.divider()
-st.subheader("업체 전달용 요약(월간 텍스트)")
-last_day = date(y, m, calendar.monthrange(y, m)[1])
-all_days = [date(y, m, d) for d in range(1, last_day.day + 1)]
-
-lines: list[str] = []
-lines.append("동약협회입니다.")
-lines.append(f"{y}년 {m:02d}월 도시락 변경/배달불요 내역입니다.")
-
-no_delivery = [d for d in all_days if get_delivery_flag(delivery_df, d) != "Y"]
-if no_delivery:
-    lines.append("")
-    lines.append("【배달불요】")
-    for d in no_delivery:
-        wd = ["월", "화", "수", "목", "금", "토", "일"][d.weekday()]
-        lines.append(f"▶ {m:02d}/{d.day:02d}({wd}) : 배달불요")
-
-changed = [d for d in all_days if get_value(change_df, d, "change_menu") != ""]
-if changed:
-    lines.append("")
-    lines.append("【변경메뉴】")
-    for d in changed:
-        wd = ["월", "화", "수", "목", "금", "토", "일"][d.weekday()]
-        cm = get_value(change_df, d, "change_menu")
-        lines.append(f"▶ {m:02d}/{d.day:02d}({wd}) : {cm}")
-
-st.text_area("복사해서 문자/카톡에 붙여넣기", "\n".join(lines), height=220)
