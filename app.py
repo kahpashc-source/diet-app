@@ -26,7 +26,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
 CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
-DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)  -> Y만 저장(배달 필요)
+DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N) -> Y만 저장(배달 필요)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
 # -----------------------------
@@ -132,7 +132,6 @@ def get_value(df: pd.DataFrame, d: date, col: str) -> str:
     return _nfc(hit.iloc[0][col])
 
 def get_delivery_flag(df: pd.DataFrame, d: date) -> str:
-    # 레코드가 있으면 Y(배달 필요), 없으면 N(배달불요)
     ds = _iso(d)
     return "Y" if not df[df["date"] == ds].empty else "N"
 
@@ -167,7 +166,7 @@ def restore_from_zip(uploaded) -> tuple[bool, str]:
     for info in zf.infolist():
         if info.is_dir():
             continue
-        name_only = Path(info.filename).name  # 폴더 경로 제거
+        name_only = Path(info.filename).name
         if name_only in TARGET_FILES:
             found[name_only] = info
 
@@ -181,7 +180,7 @@ def restore_from_zip(uploaded) -> tuple[bool, str]:
     return True, "복원 완료: data 폴더의 CSV를 강제로 교체했습니다."
 
 # -----------------------------
-# 로고 base64
+# 이미지(base64 data uri)
 # -----------------------------
 def file_to_data_uri(uploaded) -> str:
     if uploaded is None:
@@ -204,7 +203,6 @@ if "last_clicked" not in st.session_state:
 # 상단
 # -----------------------------
 st.title("맘스락 식단 변경 프로그램")
-
 base_df, change_df, delivery_df, idx_df = load_all()
 
 # -----------------------------
@@ -213,6 +211,7 @@ base_df, change_df, delivery_df, idx_df = load_all()
 with st.sidebar:
     st.header("1) 메뉴 인덱스 관리")
     st.caption("가나다 순 자동 정렬")
+
     new_name = st.text_input("메뉴 추가", placeholder="예: 소고기무국")
     c1, c2 = st.columns(2)
     with c1:
@@ -282,21 +281,28 @@ with cNow:
 st.session_state.ym = (y, m)
 
 # -----------------------------
-# 달력(입력용) - 간단 표시 + 클릭 입력창
+# 달력(입력용)
+# - 기본: 흰색
+# - 변경: 노랑 계열 + "변경" 뱃지
+# - 배달불요: 핑크 계열 + "배달불요" 뱃지
 # -----------------------------
+st.caption("※ 날짜 클릭 → 입력창(저장 시 달력으로 복귀)")
+
 def cell_label_input(d: date) -> str:
     base = get_value(base_df, d, "base_menu")
     change = get_value(change_df, d, "change_menu")
-    delivery = get_delivery_flag(delivery_df, d)  # Y=배달, N=배달불요
+    delivery = get_delivery_flag(delivery_df, d)
 
-    lines = [f"{d.day:02d}"]
+    # 버튼 텍스트는 간결하게(칸 안 잘림 방지)
+    parts = [f"{d.day:02d}"]
     if delivery != "Y":
-        lines.append("배달불요")
+        parts.append("배달불요")
     if change:
-        lines.append(f"변경: {change}")
-    elif base:
-        lines.append(base)
-    return "\n".join(lines)
+        parts.append(f"변경:{change}")
+    else:
+        if base:
+            parts.append(base)
+    return "\n".join(parts)
 
 def open_editor(d: date):
     st.session_state.last_clicked = _iso(d)
@@ -314,15 +320,67 @@ if len(month_days) < 42:
 else:
     month_days = month_days[:42]
 
+# ✅ 버튼별 클래스 적용을 위해 HTML+JS로 스타일 주입 (Streamlit 버튼 자체는 클래스 부여가 어려움)
+# - workaround: 각 버튼 key를 이용해 data-testid 요소를 찾아 근처 button에 스타일을 적용
+def inject_calendar_style(keys_changed: set[str], keys_nodlv: set[str]):
+    # JS에서 Streamlit이 만든 버튼들을 찾아 스타일을 덧씌웁니다.
+    js = f"""
+    <script>
+    const changed = new Set({list(keys_changed)});
+    const nodlv = new Set({list(keys_nodlv)});
+
+    function apply() {{
+      const all = window.parent.document.querySelectorAll('button[kind="secondary"]');
+      all.forEach(btn => {{
+        const k = btn.getAttribute("data-testid") || "";
+      }});
+      // Streamlit은 버튼에 key를 직접 안 박습니다.
+      // 따라서, 라벨 텍스트의 '변경:' / '배달불요'로 2차 판별해 적용합니다(안정적).
+      const buttons = window.parent.document.querySelectorAll('button');
+      buttons.forEach(b => {{
+        const t = (b.innerText || "").trim();
+        if (!t) return;
+        if (t.includes("배달불요")) {{
+          b.style.background = "rgba(255, 235, 238, 1)";
+          b.style.border = "2px solid rgba(216, 65, 90, 0.65)";
+          b.style.borderRadius = "14px";
+        }}
+        if (t.includes("변경:") || t.includes("변경:") || t.includes("변경:")) {{
+          b.style.background = "rgba(255, 248, 225, 1)";
+          b.style.border = "2px solid rgba(222, 150, 35, 0.70)";
+          b.style.borderRadius = "14px";
+        }}
+      }});
+    }}
+    setTimeout(apply, 50);
+    setTimeout(apply, 250);
+    </script>
+    """
+    components.html(js, height=0)
+
+keys_changed, keys_nodlv = set(), set()
+
 for row in range(6):
     cols = st.columns(7)
     for col in range(7):
         d = month_days[row * 7 + col]
         in_month = (d.month == m)
-        label = cell_label_input(d) if in_month else ""
         disabled = not in_month
-        if cols[col].button(label if label else " ", key=f"daybtn-{y}-{m}-{row}-{col}", disabled=disabled, use_container_width=True):
-            open_editor(d)
+        label = cell_label_input(d) if in_month else " "
+
+        # key 기록(포스터는 별도라 달력은 텍스트 기반 스타일링 사용)
+        if in_month:
+            if get_value(change_df, d, "change_menu"):
+                keys_changed.add(f"daybtn-{y}-{m}-{row}-{col}")
+            if get_delivery_flag(delivery_df, d) != "Y":
+                keys_nodlv.add(f"daybtn-{y}-{m}-{row}-{col}")
+
+        if cols[col].button(label, key=f"daybtn-{y}-{m}-{row}-{col}", disabled=disabled, use_container_width=True):
+            if in_month:
+                open_editor(d)
+
+# 달력 색상 적용(텍스트 기반)
+inject_calendar_style(keys_changed, keys_nodlv)
 
 # -----------------------------
 # 날짜 편집 Dialog
@@ -389,36 +447,10 @@ if clicked_iso:
     edit_dialog(clicked_date)
 
 # -----------------------------
-# 4) 포스터(출력용 1장) - PNG 다운로드
+# 포스터(1장) - 예시처럼 월~금만 / 색상 구분 / 로고 포함 / PNG 저장
 # -----------------------------
 st.divider()
-st.header("4) 포스터(출력용 1장) 미리보기 / PNG 저장")
-
-def build_weekday_grid(year: int, month: int):
-    """
-    예시처럼 '월~금'만 포스터에 배치.
-    """
-    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
-    days = list(cal.itermonthdates(year, month))
-
-    # 주 단위로 잘라서 월~금만 남김
-    weeks = [days[i:i+7] for i in range(0, len(days), 7)]
-    rows = []
-    for w in weeks:
-        wk = w[:5]  # 월~금
-        # 해당 월 날짜가 하나도 없으면 스킵
-        if not any(d.month == month for d in wk):
-            continue
-        rows.append(wk)
-    # 최소 5행 정도로 맞추고 싶으면 여기서 패딩 가능(지금은 실제 주수만)
-    return rows
-
-wd_kr = ["월", "화", "수", "목", "금", "토", "일"]
-
-rows = build_weekday_grid(y, m)
-
-title = f"맘스락 {m:02d}월<br/>식단 변경"
-poster_filename = f"맘스락_{y}_{m:02d}_식단변경.png"
+st.header("포스터(출력용 1장) 미리보기 / PNG 저장")
 
 def esc(s: str) -> str:
     return (
@@ -430,61 +462,70 @@ def esc(s: str) -> str:
         .replace("'", "&#39;")
     )
 
-# 포스터 셀 HTML 생성
+def build_weeks_mon_fri(year: int, month: int):
+    cal = calendar.Calendar(firstweekday=0)
+    days = list(cal.itermonthdates(year, month))
+    weeks = [days[i:i+7] for i in range(0, len(days), 7)]
+    rows = []
+    for w in weeks:
+        wk = w[:5]  # 월~금
+        if not any(d.month == month for d in wk):
+            continue
+        rows.append(wk)
+    return rows
+
+wd_kr = ["월", "화", "수", "목", "금", "토", "일"]
+rows = build_weeks_mon_fri(y, m)
+
+poster_filename = f"맘스락_{y}_{m:02d}_식단변경.png"
+title_html = f"맘스락 {m:02d}월<br/>식단 변경"
+
+left_logo_html = (
+    f'<img class="logo-img" src="{moms_logo_uri}" />'
+    if moms_logo_uri else '<div class="logo-text"><b>MOMS</b></div>'
+)
+right_logo_html = (
+    f'<img class="logo-img" src="{kapma_logo_uri}" />'
+    if kapma_logo_uri else '<div class="logo-text"><b>동약협회</b></div>'
+)
+
 cells_html = ""
 for wk in rows:
     cells_html += '<div class="row">'
     for d in wk:
         if d.month != m:
-            # 빈칸(점선)
             cells_html += '<div class="cell empty"></div>'
             continue
 
         base = esc(get_value(base_df, d, "base_menu"))
         change = esc(get_value(change_df, d, "change_menu"))
-        delivery = get_delivery_flag(delivery_df, d)  # Y=배달, N=배달불요
+        delivery = get_delivery_flag(delivery_df, d)
 
-        # 스타일 결정
         cls = "cell"
-        badge = ""
-        change_block = ""
-        menu_main = base
-
+        badges = []
         if delivery != "Y":
             cls += " nodlv"
-            badge = '<span class="badge nodlv">배달불요</span>'
-
+            badges.append('<span class="badge nodlv">배달불요</span>')
         if change:
             cls += " changed"
-            badge = (badge + ' ' if badge else '') + '<span class="badge changed">변경</span>'
-            menu_main = base  # 기본도 보여주되(예시처럼)
-            change_block = f'<div class="change">{change}</div>'
+            badges.append('<span class="badge changed">변경</span>')
 
-        # 요일 표시(월~금)
         wd = wd_kr[d.weekday()]
+        # 메뉴 표시: 기본은 검정 / 변경은 빨강 굵게
+        menu_main = base
+        change_block = f'<div class="change">{change}</div>' if change else ""
+
         cells_html += f"""
         <div class="{cls}">
           <div class="top">
             <div class="day">{d.day:02d} <span class="wd">({wd})</span></div>
-            <div class="badges">{badge}</div>
+            <div class="badges">{''.join(badges)}</div>
           </div>
           <div class="menu">{menu_main}</div>
           {change_block}
         </div>
         """
     cells_html += "</div>"
-
-# 로고(없으면 텍스트 박스)
-left_logo_html = (
-    f'<img class="logo-img" src="{moms_logo_uri}" />'
-    if moms_logo_uri
-    else '<div class="logo-text"><b>MOMS</b></div>'
-)
-right_logo_html = (
-    f'<img class="logo-img" src="{kapma_logo_uri}" />'
-    if kapma_logo_uri
-    else '<div class="logo-text"><b>동약협회</b></div>'
-)
 
 poster_html = f"""
 <!doctype html>
@@ -497,17 +538,42 @@ poster_html = f"""
     font-family: "Noto Sans KR","Malgun Gothic",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
   }}
   .wrap {{
-    width: 760px;
+    width: 980px;
     padding: 18px 18px 14px 18px;
     box-sizing: border-box;
     background: #fff;
   }}
+  .btnbar {{
+    display:flex; gap:10px; align-items:center;
+    margin: 0 0 12px 0;
+  }}
+  button {{
+    border: 0; border-radius: 12px;
+    padding: 10px 14px;
+    font-weight: 900;
+    cursor: pointer;
+    background:#111; color:#fff;
+  }}
+  #downloadLink {{
+    display:none;
+    font-weight: 900;
+    text-decoration: none;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: #1f7a1f;
+    color:#fff;
+  }}
+  .hint {{
+    font-size: 12px;
+    color: rgba(0,0,0,0.55);
+  }}
+
   .header {{
     display:flex; align-items:center; justify-content:space-between;
     margin-bottom: 10px;
   }}
   .logo-box {{
-    width: 210px; height: 74px;
+    width: 250px; height: 86px;
     border: 1.5px solid rgba(0,0,0,0.15);
     border-radius: 18px;
     display:flex; align-items:center; justify-content:center;
@@ -515,43 +581,43 @@ poster_html = f"""
     background:#fff;
   }}
   .logo-img {{ max-width: 92%; max-height: 92%; object-fit: contain; }}
-  .logo-text {{ font-size: 28px; color:#111; }}
+  .logo-text {{ font-size: 30px; color:#111; }}
   .title {{
     flex: 1;
     text-align:center;
-    font-weight: 900;
-    font-size: 34px;
+    font-weight: 950;
+    font-size: 40px;
     line-height: 1.05;
-    color: #111;
+    color:#111;
   }}
 
   .dow {{
     display:grid;
     grid-template-columns: repeat(5, 1fr);
-    gap: 10px;
-    margin: 8px 0 6px 0;
+    gap: 12px;
+    margin: 12px 0 8px 0;
   }}
   .dow div {{
     text-align:center;
-    font-weight: 800;
+    font-weight: 900;
     color:#111;
   }}
 
   .grid {{
     display:flex;
     flex-direction:column;
-    gap: 10px;
+    gap: 12px;
   }}
   .row {{
     display:grid;
     grid-template-columns: repeat(5, 1fr);
-    gap: 10px;
+    gap: 12px;
   }}
   .cell {{
-    border: 1.6px solid rgba(0,0,0,0.25);
-    border-radius: 16px;
-    padding: 10px 10px 8px 10px;
-    min-height: 92px;
+    border: 1.8px solid rgba(0,0,0,0.24);
+    border-radius: 18px;
+    padding: 12px 12px 10px 12px;
+    min-height: 108px;
     box-sizing: border-box;
     background:#fff;
   }}
@@ -560,92 +626,76 @@ poster_html = f"""
     background: #fff;
   }}
   .cell.nodlv {{
-    background: #fff3f4;
-    border-color: rgba(216, 65, 90, 0.55);
+    background: #fff1f3;
+    border-color: rgba(216, 65, 90, 0.65);
   }}
   .cell.changed {{
     background: #fff7e8;
-    border-color: rgba(222, 150, 35, 0.6);
+    border-color: rgba(222, 150, 35, 0.72);
   }}
   .top {{
     display:flex;
     align-items:flex-start;
     justify-content:space-between;
-    margin-bottom: 6px;
-    gap: 6px;
+    margin-bottom: 8px;
+    gap: 8px;
   }}
   .day {{
-    font-weight: 900;
+    font-weight: 950;
     color:#111;
+    font-size: 16px;
   }}
-  .wd {{ font-weight: 700; color: rgba(0,0,0,0.55); font-size: 12px; }}
-  .badges {{ display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }}
+  .wd {{
+    font-weight: 800;
+    color: rgba(0,0,0,0.55);
+    font-size: 12px;
+  }}
+  .badges {{
+    display:flex;
+    gap:6px;
+    flex-wrap:wrap;
+    justify-content:flex-end;
+  }}
   .badge {{
     font-size: 12px;
-    font-weight: 800;
-    padding: 2px 8px;
+    font-weight: 950;
+    padding: 3px 10px;
     border-radius: 999px;
-    border: 1.4px solid rgba(0,0,0,0.18);
+    border: 1.6px solid rgba(0,0,0,0.18);
     background: #fff;
     color:#111;
     white-space:nowrap;
   }}
   .badge.nodlv {{
-    border-color: rgba(216, 65, 90, 0.55);
+    border-color: rgba(216, 65, 90, 0.65);
     color: rgb(190, 30, 60);
     background: rgba(216, 65, 90, 0.06);
   }}
   .badge.changed {{
-    border-color: rgba(222, 150, 35, 0.6);
+    border-color: rgba(222, 150, 35, 0.72);
     color: rgb(175, 85, 0);
     background: rgba(222, 150, 35, 0.10);
   }}
-
   .menu {{
-    font-size: 16px;
-    font-weight: 750;
+    font-size: 18px;
+    font-weight: 800;
     color:#111;
-    line-height: 1.15;
+    line-height: 1.18;
     word-break: keep-all;
   }}
   .change {{
-    margin-top: 6px;
-    font-size: 16px;
-    font-weight: 900;
+    margin-top: 8px;
+    font-size: 18px;
+    font-weight: 950;
     color: rgb(200, 30, 45);
-    line-height: 1.15;
+    line-height: 1.18;
     word-break: keep-all;
   }}
-
-  .hint {{
+  .footer {{
     margin-top: 10px;
     font-size: 12px;
     color: rgba(0,0,0,0.55);
     text-align:right;
-  }}
-
-  .btnbar {{
-    display:flex;
-    gap: 10px;
-    margin: 10px 0 14px 0;
-    align-items:center;
-  }}
-  button {{
-    border: 0;
-    border-radius: 10px;
-    padding: 10px 12px;
-    font-weight: 800;
-    cursor: pointer;
-  }}
-  #btnCapture {{ background:#111; color:#fff; }}
-  #downloadLink {{
-    display:none;
-    font-weight: 800;
-    text-decoration: none;
-    padding: 10px 12px;
-    border-radius: 10px;
-    background: #1f7a1f;
-    color:#fff;
   }}
 </style>
 </head>
@@ -654,13 +704,13 @@ poster_html = f"""
     <div class="btnbar">
       <button id="btnCapture">PNG로 저장</button>
       <a id="downloadLink" download="{poster_filename}">다운로드</a>
-      <span style="font-size:12px;color:rgba(0,0,0,0.55);">※ 버튼 클릭 → PNG 다운로드 → 카톡/문자에 첨부</span>
+      <span class="hint">※ 버튼 클릭 → PNG 다운로드 → 카톡/문자에 첨부</span>
     </div>
 
     <div id="poster">
       <div class="header">
         <div class="logo-box">{left_logo_html}</div>
-        <div class="title">{title}</div>
+        <div class="title">{title_html}</div>
         <div class="logo-box">{right_logo_html}</div>
       </div>
 
@@ -672,7 +722,7 @@ poster_html = f"""
         {cells_html}
       </div>
 
-      <div class="hint">{y}-{m:02d} / generated by diet-app</div>
+      <div class="footer">{y}-{m:02d} / moms diet poster</div>
     </div>
   </div>
 
@@ -704,7 +754,6 @@ poster_html = f"""
 </html>
 """
 
-# 포스터 표시
 components.html(poster_html, height=980, scrolling=True)
 
 # -----------------------------
@@ -712,7 +761,6 @@ components.html(poster_html, height=980, scrolling=True)
 # -----------------------------
 st.divider()
 st.subheader("업체 전달용 요약(월간 텍스트)")
-
 last_day = date(y, m, calendar.monthrange(y, m)[1])
 all_days = [date(y, m, d) for d in range(1, last_day.day + 1)]
 
