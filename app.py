@@ -38,10 +38,10 @@ DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 HOLIDAYS_PATH = DATA_DIR / "holidays.csv"           # date,name,auto_delivery_no(Y/N)
 
-# ✅ 연락처(동약협회) — 요청대로 변경
+# ✅ 연락처(동약협회)
 KAPMA_PHONE = "010-7101-5871"
 
-# ✅ 로고/이미지 파일명 (없으면 업로드로 대체)
+# ✅ 로고/이미지 파일명
 MOMS_LOGO_PATH = ASSETS_DIR / "moms_logo.png"
 KAPMA_LOGO_PATH = ASSETS_DIR / "kapma_logo.png"
 BOWL_PATH = ASSETS_DIR / "gongyang_bowl.png"
@@ -154,16 +154,10 @@ def build_day_maps(year: int, month: int, base_df: pd.DataFrame, chg_df: pd.Data
 # 공휴일(기본값 + 사용자 편집용 CSV)
 # -----------------------------
 def ensure_holidays_seed() -> None:
-    """
-    기본 holidays.csv가 없으면 생성.
-    - 2026년 한국 주요 공휴일/대체공휴일(일정 확정형)만 시드로 넣음.
-    - 다른 연도는 사용자가 holidays.csv에 추가 가능.
-    """
     ensure_csv(HOLIDAYS_PATH, ["date", "name", "auto_delivery_no"])
     df = read_csv(HOLIDAYS_PATH)
-
     if not df.empty and "date" in df.columns and df["date"].astype(str).str.len().gt(0).any():
-        return  # 이미 사용자가 관리 중
+        return
 
     seed_2026 = [
         ("2026-01-01", "신정", "Y"),
@@ -210,18 +204,11 @@ def load_holidays_map_for_month(year: int, month: int) -> dict[int, str]:
     return hm
 
 def auto_apply_holiday_delivery_no(year: int, month: int, holiday_map: dict[int, str], del_df: pd.DataFrame, del_exists: set[int]) -> tuple[pd.DataFrame, int]:
-    """
-    공휴일인데 delivery.csv에 기록이 없으면 자동으로 Y(배달불요) 저장.
-    - 이미 사용자가 해당 날짜를 N으로 저장했다면(=기록이 존재), 존중(변경하지 않음)
-    """
     changed = 0
-    if not holiday_map:
-        return del_df, changed
     for day in holiday_map.keys():
         if day in del_exists:
-            continue  # 사용자가 이미 Y/N을 선택 저장한 기록이 있음
-        d = date(year, month, day)
-        del_df = upsert_delivery(del_df, d, "Y")
+            continue
+        del_df = upsert_delivery(del_df, date(year, month, day), "Y")
         changed += 1
     return del_df, changed
 
@@ -242,21 +229,17 @@ idx_df = read_csv(MENU_INDEX_PATH)
 if idx_df.empty:
     idx_df = pd.DataFrame(columns=["name"])
 
-# 가나다/사전순 정렬 유지
 if "name" in idx_df.columns:
     idx_df["name"] = idx_df["name"].astype(str).apply(norm_menu)
     idx_df = idx_df[idx_df["name"].str.len() > 0].drop_duplicates().sort_values("name").reset_index(drop=True)
 
 # -----------------------------
-# 사이드바: 월 선택 (1개월만 표시)
+# 사이드바
 # -----------------------------
 st.sidebar.header("월 선택")
 t = date.today()
-default_year = t.year
-default_month = t.month
-
-year = int(st.sidebar.number_input("연도", min_value=2020, max_value=2099, value=int(default_year), step=1))
-month = int(st.sidebar.selectbox("월", list(range(1, 13)), index=int(default_month) - 1))
+year = int(st.sidebar.number_input("연도", min_value=2020, max_value=2099, value=int(t.year), step=1))
+month = int(st.sidebar.selectbox("월", list(range(1, 13)), index=int(t.month) - 1))
 people = int(st.sidebar.number_input("인원", min_value=1, max_value=50, value=1, step=1))
 
 st.sidebar.divider()
@@ -281,7 +264,7 @@ with col_b1:
         data=make_backup_zip(),
         file_name=f"moms_menu_backup_{year:04d}{month:02d}.zip",
         mime="application/zip",
-        use_container_width=True
+        use_container_width=True,
     )
 
 with col_b2:
@@ -315,7 +298,7 @@ with col_b2:
             st.sidebar.error(f"복원 실패: {e}")
 
 # -----------------------------
-# 상단 헤더(제목 3줄 + 연락처 2줄 방지)
+# 상단 헤더
 # -----------------------------
 title_html = f"""
 <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin:4px 0 10px 0;">
@@ -333,7 +316,7 @@ title_html = f"""
 components.html(title_html, height=110)
 
 # -----------------------------
-# 로고/이미지 준비 (업로드 대체 가능)
+# 로고/그림 설정
 # -----------------------------
 with st.expander("로고/그림 설정(필요시)", expanded=False):
     c1, c2, c3 = st.columns(3)
@@ -358,7 +341,7 @@ kapma_logo_b64 = b64_image(KAPMA_LOGO_PATH)
 bowl_b64 = b64_image(BOWL_PATH)
 
 # -----------------------------
-# 메뉴 인덱스 관리
+# 메뉴 인덱스
 # -----------------------------
 st.subheader("1) 메뉴 인덱스 관리(가나다/사전순 자동정렬)")
 
@@ -385,7 +368,7 @@ else:
 st.divider()
 
 # -----------------------------
-# 공휴일 로딩 + 공휴일 자동 '배달불요' 반영(기록 없을 때만)
+# 공휴일 자동 반영
 # -----------------------------
 holiday_map = load_holidays_map_for_month(year, month)
 
@@ -393,27 +376,20 @@ base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, ch
 del_df, holiday_auto_count = auto_apply_holiday_delivery_no(year, month, holiday_map, del_df, del_exists)
 if holiday_auto_count > 0:
     save_df(del_df, DELIVERY_PATH)
-    # 저장 반영 재로딩
     del_df = read_csv(DELIVERY_PATH)
     base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
 
 # -----------------------------
-# 월간 요약 대시보드(통계)
+# 월간 요약(통계)
 # -----------------------------
 st.subheader("2) 월간 요약(통계)")
 
-# 월의 총 일수
 days_in_month = calendar.monthrange(year, month)[1]
-all_days = [date(year, month, d) for d in range(1, days_in_month + 1)]
-
-# 배달불요 / 배달
 no_delivery_days = sorted([d for d, v in del_map.items() if v])
 no_delivery_cnt = len(no_delivery_days)
 delivery_cnt = days_in_month - no_delivery_cnt
-
 chg_cnt = len([d for d, v in chg_map.items() if v])
 
-# 메뉴 빈도(기본+변경 합산)
 menus = []
 for d in range(1, days_in_month + 1):
     if base_map.get(d):
@@ -429,10 +405,6 @@ m1.metric("총 일수", f"{days_in_month}일")
 m2.metric("배달일수", f"{delivery_cnt}일")
 m3.metric("배달불요", f"{no_delivery_cnt}일")
 m4.metric("변경메뉴 있는 날", f"{chg_cnt}일")
-
-if holiday_map:
-    holiday_days = sorted(list(holiday_map.keys()))
-    st.caption("🎌 공휴일은 delivery.csv에 기록이 없을 경우 자동으로 ‘배달불요(Y)’로 저장됩니다. (사용자가 N으로 저장한 날은 존중합니다.)")
 
 if not top_menu_df.empty:
     st.markdown("**가장 자주 등장한 메뉴 TOP 10**")
@@ -459,10 +431,7 @@ STYLE = """
 st.markdown(STYLE, unsafe_allow_html=True)
 
 dow = ["월", "화", "수", "목", "금", "토", "일"]
-components.html(
-    '<div class="cal-grid">' + "".join([f'<div class="cal-head">{d}</div>' for d in dow]) + "</div>",
-    height=34
-)
+components.html('<div class="cal-grid">' + "".join([f'<div class="cal-head">{d}</div>' for d in dow]) + "</div>", height=34)
 
 if "selected_day" not in st.session_state:
     st.session_state.selected_day = None
@@ -471,7 +440,6 @@ cal = calendar.Calendar(firstweekday=0)
 weeks = cal.monthdayscalendar(year, month)
 
 def cell_kind(day: int) -> str:
-    # 배달불요 > 변경 > 기본
     if day <= 0:
         return "empty"
     if del_map.get(day, False):
@@ -514,16 +482,10 @@ for w in weeks:
             else:
                 kind = cell_kind(day)
                 key = f"day_{year}_{month}_{day}"
-                st.markdown(
-                    f"<style>div[data-testid='stButton'][data-key='{key}'] button{{{cell_css(kind)}}}</style>",
-                    unsafe_allow_html=True
-                )
+                st.markdown(f"<style>div[data-testid='stButton'][data-key='{key}'] button{{{cell_css(kind)}}}</style>", unsafe_allow_html=True)
                 if st.button(cell_label(day), key=key, use_container_width=True):
                     st.session_state.selected_day = int(day)
 
-# -----------------------------
-# 날짜 입력 UI
-# -----------------------------
 sel = st.session_state.selected_day
 if sel is not None:
     dsel = date(year, month, sel)
@@ -533,33 +495,22 @@ if sel is not None:
     st.markdown(f"### 📌 선택한 날짜: {dsel.strftime('%Y-%m-%d')}" + (f"  (🎌 {holiday_map[sel]})" if is_holiday else ""))
 
     left, right = st.columns([2, 1], gap="large")
-
     index_options = idx_df["name"].tolist() if (not idx_df.empty and "name" in idx_df.columns) else []
 
     with left:
-        st.markdown("#### 기본/변경 메뉴 입력")
         cA, cB = st.columns(2, gap="medium")
-
         with cA:
             base_pick = st.selectbox("기본메뉴(인덱스 선택)", ["(선택안함)"] + index_options, index=0, key=f"base_pick_{dsel}")
             base_text = st.text_input("기본메뉴(직접 입력)", value=base_map.get(sel, ""), key=f"base_text_{dsel}")
-
         with cB:
             chg_pick = st.selectbox("변경메뉴(인덱스 선택)", ["(선택안함)"] + index_options, index=0, key=f"chg_pick_{dsel}")
             chg_text = st.text_input("변경메뉴(직접 입력)", value=chg_map.get(sel, ""), key=f"chg_text_{dsel}")
 
-        # ✅ 배달불요 기본값:
-        # - 사용자가 이미 저장한 기록이 있으면 그 값을 사용
-        # - 저장 기록이 없고 공휴일이면 True로 기본 체크
-        if sel in del_exists:
-            default_del = del_map.get(sel, False)
-        else:
-            default_del = True if is_holiday else del_map.get(sel, False)
-
+        default_del = del_map.get(sel, False) if (sel in del_exists) else (True if is_holiday else False)
         delivery_no = st.checkbox("🚫 배달불요(체크하면 배달불요)", value=default_del, key=f"del_{dsel}")
 
         if is_holiday and (sel not in del_exists) and (not delivery_no):
-            st.warning("공휴일(기념일)인데 ‘배달불요’가 해제되어 있습니다. 필요 시 다시 확인하세요.")
+            st.warning("공휴일인데 ‘배달불요’가 해제되어 있습니다. 필요 시 다시 확인하세요.")
 
         btn1, btn2, btn3 = st.columns(3)
         with btn1:
@@ -567,7 +518,7 @@ if sel is not None:
                 base_v = base_text if base_pick == "(선택안함)" else base_pick
                 chg_v = chg_text if chg_pick == "(선택안함)" else chg_pick
 
-                global base_df, chg_df, del_df
+                # ✅ global 금지(필요 없음) — 여기서 그냥 재할당하면 됩니다
                 base_df = upsert_date_value(base_df, "date", "base_menu", dsel, base_v)
                 chg_df = upsert_date_value(chg_df, "date", "change_menu", dsel, chg_v)
                 del_df = upsert_delivery(del_df, dsel, "Y" if delivery_no else "N")
@@ -607,27 +558,24 @@ if sel is not None:
         st.markdown("#### 빠른 확인")
         st.write("기본:", base_map.get(sel, ""))
         st.write("변경:", chg_map.get(sel, ""))
-        st.write("배달불요:", "예" if (sel in del_exists and del_map.get(sel, False)) or (sel not in del_exists and default_del) else "아니오")
+        st.write("배달불요:", "예" if delivery_no else "아니오")
         if is_holiday:
             st.info(f"🎌 공휴일/기념일: {holiday_map[sel]}")
 
 st.divider()
 
 # -----------------------------
-# 공휴일 리스트 편집(선택)
+# 공휴일 리스트(참고)
 # -----------------------------
 with st.expander("공휴일/휴무일 관리(holidays.csv)", expanded=False):
-    st.caption("형식: date(YYYY-MM-DD), name, auto_delivery_no(Y/N).  auto_delivery_no가 Y인 날은 기록이 없을 때 자동으로 배달불요(Y)로 저장됩니다.")
+    st.caption("형식: date(YYYY-MM-DD), name, auto_delivery_no(Y/N)")
     hdf = read_csv(HOLIDAYS_PATH)
-    if hdf.empty:
-        st.info("holidays.csv가 비어 있습니다.")
-    else:
-        st.dataframe(hdf, use_container_width=True, height=220)
+    st.dataframe(hdf, use_container_width=True, height=220)
 
 st.divider()
 
 # -----------------------------
-# 포스터 미리보기 + A4 1페이지 HTML 다운로드
+# 포스터 미리보기 + A4 HTML 다운로드(깨짐 방지)
 # -----------------------------
 st.subheader("4) 포스터(스크린샷용) 미리보기 / 5) 업체 전달용 파일 출력(A4 1페이지 최적화)")
 
@@ -684,111 +632,53 @@ def make_poster_html(a4: bool = False) -> str:
     page_h = "297mm" if a4 else "auto"
     pad = "10mm" if a4 else "14px"
 
+    # ✅ 깨짐 방지: charset meta 2종(브라우저 호환)
     return f"""
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
 <style>
   @page {{ size: A4; margin: 10mm; }}
   body {{
     margin:0; padding:0; background:#f7f7f7;
-    font-family: "Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;
+    font-family: "Apple SD Gothic Neo","Malgun Gothic","맑은 고딕","Noto Sans KR",sans-serif;
   }}
   .page {{
-    width:{page_w};
-    height:{page_h};
-    background:white;
-    margin:0 auto;
-    padding:{pad};
+    width:{page_w}; height:{page_h};
+    background:white; margin:0 auto; padding:{pad};
     box-sizing:border-box;
   }}
-  .top {{
-    display:flex; justify-content:space-between; align-items:center; gap:10px;
-    margin-bottom:6mm;
-  }}
-  .brand {{
-    display:flex; align-items:center; gap:10px;
-    border:1px solid rgba(0,0,0,0.10);
-    border-radius:14px;
-    padding:8px 10px;
-  }}
+  .top {{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6mm; }}
+  .brand {{ display:flex; align-items:center; gap:10px; border:1px solid rgba(0,0,0,0.10); border-radius:14px; padding:8px 10px; }}
   .brand img {{ height:44px; width:auto; display:block; }}
   .brand .txt {{ line-height:1.05; }}
   .brand .txt .b1 {{ font-weight:900; font-size:20px; }}
   .brand .txt .b2 {{ font-weight:800; font-size:14px; opacity:0.85; white-space:nowrap; }}
-  .title {{
-    text-align:center;
-    margin:2mm 0 5mm 0;
-    line-height:1.08;
-  }}
+  .title {{ text-align:center; margin:2mm 0 5mm 0; line-height:1.08; }}
   .title .t1 {{ font-size:34px; font-weight:900; }}
   .title .t2 {{ font-size:18px; font-weight:800; opacity:0.9; }}
-  .mid {{
-    display:flex; justify-content:center; align-items:center;
-    margin:0 0 6mm 0;
-  }}
-  .midbox {{
-    width:100%;
-    border:1px solid rgba(0,0,0,0.10);
-    border-radius:16px;
-    padding:10px 12px;
-    display:flex;
-    gap:14px;
-    align-items:center;
-    justify-content:center;
-  }}
+  .mid {{ display:flex; justify-content:center; align-items:center; margin:0 0 6mm 0; }}
+  .midbox {{ width:100%; border:1px solid rgba(0,0,0,0.10); border-radius:16px; padding:10px 12px;
+             display:flex; gap:14px; align-items:center; justify-content:center; }}
   .midbox img {{ height:86px; width:auto; display:block; }}
-  .gong {{
-    white-space:pre-line;
-    font-size:16px;
-    font-weight:800;
-    line-height:1.35;
-  }}
-  table.cal {{
-    width:100%;
-    border-collapse:separate;
-    border-spacing:8px;
-    table-layout:fixed;
-  }}
-  table.cal th {{
-    font-size:14px;
-    font-weight:900;
-    padding:6px 0;
-    opacity:0.85;
-    text-align:center;
-  }}
-  table.cal td {{
-    vertical-align:top;
-    border:1px solid rgba(0,0,0,0.12);
-    border-radius:14px;
-    padding:8px 8px;
-    height:{'26mm' if a4 else '110px'};
-    overflow:hidden;
-  }}
+  .gong {{ white-space:pre-line; font-size:16px; font-weight:800; line-height:1.35; }}
+  table.cal {{ width:100%; border-collapse:separate; border-spacing:8px; table-layout:fixed; }}
+  table.cal th {{ font-size:14px; font-weight:900; padding:6px 0; opacity:0.85; text-align:center; }}
+  table.cal td {{ vertical-align:top; border:1px solid rgba(0,0,0,0.12); border-radius:14px; padding:8px 8px;
+                 height:{'26mm' if a4 else '110px'}; overflow:hidden; }}
   td.empty {{ border:none; background:transparent; }}
   td.normal {{ background:rgba(255,255,255,1); }}
   td.change {{ background:rgba(255,180,0,0.10); border-color:rgba(255,180,0,0.35); }}
   td.delivery {{ background:rgba(255,0,0,0.08); border-color:rgba(255,0,0,0.35); }}
   .d {{ font-weight:900; font-size:16px; margin-bottom:4px; }}
-  .tag {{
-    font-size:12px;
-    font-weight:800;
-    line-height:1.25;
-    margin-top:2px;
-    word-break:break-word;
-  }}
+  .tag {{ font-size:12px; font-weight:800; line-height:1.25; margin-top:2px; word-break:break-word; }}
   .tag-hol {{ color:#0b4d7a; }}
   .tag-del {{ color:#b00020; }}
   .tag-chg {{ color:#7a4a00; }}
   .tag-base {{ color:#333; opacity:0.9; }}
-  .foot {{
-    margin-top:4mm;
-    font-size:12px;
-    opacity:0.75;
-    display:flex;
-    justify-content:space-between;
-  }}
+  .foot {{ margin-top:4mm; font-size:12px; opacity:0.75; display:flex; justify-content:space-between; }}
 </style>
 </head>
 <body>
@@ -796,17 +686,11 @@ def make_poster_html(a4: bool = False) -> str:
     <div class="top">
       <div class="brand">
         {f'<img src="{moms_img}"/>' if moms_img else '<div style="width:44px;height:44px;border-radius:10px;background:rgba(0,0,0,0.05)"></div>'}
-        <div class="txt">
-          <div class="b1">MOMS</div>
-          <div class="b2">도시락</div>
-        </div>
+        <div class="txt"><div class="b1">MOMS</div><div class="b2">도시락</div></div>
       </div>
       <div class="brand">
         {f'<img src="{kapma_img}"/>' if kapma_img else '<div style="width:44px;height:44px;border-radius:10px;background:rgba(0,0,0,0.05)"></div>'}
-        <div class="txt">
-          <div class="b1">동약협회</div>
-          <div class="b2">{safe_text(KAPMA_PHONE)}</div>
-        </div>
+        <div class="txt"><div class="b1">동약협회</div><div class="b2">{safe_text(KAPMA_PHONE)}</div></div>
       </div>
     </div>
 
@@ -825,7 +709,7 @@ def make_poster_html(a4: bool = False) -> str:
     {cal_html}
 
     <div class="foot">
-      <div>※ 공휴일은 🎌 표시 / 변경·배달불요는 색으로 강조</div>
+      <div>※ 공휴일 🎌 / 변경·배달불요는 색으로 강조</div>
       <div>{year:04d}-{month:02d}</div>
     </div>
   </div>
@@ -836,24 +720,24 @@ def make_poster_html(a4: bool = False) -> str:
 poster_html = make_poster_html(a4=False)
 components.html(poster_html, height=920, scrolling=True)
 
+# ✅ 깨짐 방지 핵심: utf-8-sig(BOM)로 다운로드
+a4_html = make_poster_html(a4=True)
 st.download_button(
     "업체 전달용 HTML 다운로드(A4 1페이지 최적화)",
-    data=make_poster_html(a4=True).encode("utf-8"),
+    data=a4_html.encode("utf-8-sig"),
     file_name=f"맘스락_{year:04d}{month:02d}_식단변경_A4.html",
-    mime="text/html",
+    mime="text/html; charset=utf-8",
     use_container_width=True
 )
 
-with st.expander("✅ A4로 PDF로 뽑는 방법(권장)", expanded=False):
+with st.expander("✅ 포스터 파일이 깨져 보일 때(필수)", expanded=False):
     st.markdown(
         """
-- 다운로드한 HTML을 **크롬/엣지로 열기**
-- **Ctrl + P(인쇄)**  
-  - 대상: **Microsoft Print to PDF** 또는 **PDF로 저장**  
-  - 용지: **A4**
-  - 배율: **한 페이지에 맞춤(또는 90~100%)**
-  - 여백: **기본 또는 좁게**
-- 결과가 2페이지로 넘어가면: **배율을 90%로 낮추면 대부분 1페이지로 맞습니다.**
+- 다운로드한 HTML은 **반드시 크롬/엣지로 열어야 합니다.** (메모장/한글/워드로 열면 깨져 보입니다)
+- 그래도 깨지면:
+  - 크롬에서 **파일 끌어다 놓기**로 열기
+  - 또는 크롬 주소창에 `file:///C:/.../파일명.html` 로 직접 열기
+- PDF로 만들기: HTML을 크롬에서 연 뒤 **Ctrl+P → Microsoft Print to PDF**
         """
     )
 
@@ -887,6 +771,5 @@ def build_message_text(year: int, month: int) -> str:
     lines.append(f"문의: {KAPMA_PHONE}")
     return "\n".join(lines)
 
-msg = build_message_text(year, month)
-st.text_area("복사용", value=msg, height=220)
+st.text_area("복사용", value=build_message_text(year, month), height=220)
 st.caption("위 내용을 그대로 복사해서 도시락 업체에 보내시면 됩니다.")
