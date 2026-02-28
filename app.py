@@ -29,9 +29,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR = APP_DIR / "assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-BACKUP_DIR = DATA_DIR / "backups"
-BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-
 BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
 CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
@@ -46,7 +43,6 @@ MOMS_LOGO_PATH = ASSETS_DIR / "moms_logo.png"
 KAPMA_LOGO_PATH = ASSETS_DIR / "kapma_logo.png"
 BOWL_PATH = ASSETS_DIR / "gongyang_bowl.png"
 
-# 공양게(기본 문구)
 DEFAULT_GONGYANG = """이 음식이 어디에서 왔는가
 내 덕행으로는 받기가 부끄럽네
 마음의 온갖 탐욕을 떠나
@@ -60,17 +56,48 @@ def ensure_csv(path: Path, cols: list[str]) -> None:
         pd.DataFrame(columns=cols).to_csv(path, index=False, encoding="utf-8-sig")
 
 def read_csv(path: Path) -> pd.DataFrame:
+    """
+    ✅ 핵심: keep_default_na=False + na_filter=False
+    - 빈칸이 NaN(float)로 바뀌는 문제를 차단
+    """
     if not path.exists():
         return pd.DataFrame()
     try:
-        return pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+        return pd.read_csv(
+            path,
+            dtype=str,
+            encoding="utf-8-sig",
+            keep_default_na=False,
+            na_filter=False,
+        )
     except Exception:
-        return pd.read_csv(path, dtype=str, encoding="utf-8")
+        return pd.read_csv(
+            path,
+            dtype=str,
+            encoding="utf-8",
+            keep_default_na=False,
+            na_filter=False,
+        )
 
-def norm_menu(s: str) -> str:
-    s = (s or "").strip()
+def norm_menu(x) -> str:
+    """
+    ✅ 핵심: 어떤 타입이 와도 안전하게 문자열로 처리
+    - NaN(float), None, 숫자 모두 대응
+    """
+    if x is None:
+        return ""
+    # pandas가 NaN을 줄 가능성까지 방어
+    try:
+        if pd.isna(x):
+            return ""
+    except Exception:
+        pass
+
+    s = str(x).strip()
     s = unicodedata.normalize("NFC", s)
-    return re.sub(r"\s+", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    # "nan" 문자열로 들어오는 최악 케이스 방지
+    return "" if s.lower() == "nan" else s
 
 def b64_image(path: Path) -> str | None:
     if not path.exists():
@@ -146,12 +173,12 @@ def build_day_maps(year: int, month: int, base_df: pd.DataFrame, chg_df: pd.Data
             d = parse_date(r.get("date"))
             if d and d.year == year and d.month == month:
                 del_exists.add(d.day)
-                del_map[d.day] = (str(r.get("delivery", "N")).upper().startswith("Y"))
+                del_map[d.day] = str(r.get("delivery", "N")).upper().startswith("Y")
 
     return base_map, chg_map, del_map, del_exists
 
 # -----------------------------
-# 공휴일(기본값 + 사용자 편집용 CSV)
+# 공휴일
 # -----------------------------
 def ensure_holidays_seed() -> None:
     ensure_csv(HOLIDAYS_PATH, ["date", "name", "auto_delivery_no"])
@@ -180,8 +207,7 @@ def ensure_holidays_seed() -> None:
         ("2026-10-09", "한글날", "Y"),
         ("2026-12-25", "성탄절", "Y"),
     ]
-    df = pd.DataFrame(seed_2026, columns=["date", "name", "auto_delivery_no"])
-    save_df(df, HOLIDAYS_PATH)
+    save_df(pd.DataFrame(seed_2026, columns=["date", "name", "auto_delivery_no"]), HOLIDAYS_PATH)
 
 def load_holidays_map_for_month(year: int, month: int) -> dict[int, str]:
     df = read_csv(HOLIDAYS_PATH)
@@ -200,10 +226,10 @@ def load_holidays_map_for_month(year: int, month: int) -> dict[int, str]:
         if d.year == year and d.month == month:
             auto = str(r.get("auto_delivery_no", "Y")).upper().startswith("Y")
             if auto:
-                hm[d.day] = str(r.get("name", "")).strip() or "공휴일"
+                hm[d.day] = norm_menu(r.get("name", "")) or "공휴일"
     return hm
 
-def auto_apply_holiday_delivery_no(year: int, month: int, holiday_map: dict[int, str], del_df: pd.DataFrame, del_exists: set[int]) -> tuple[pd.DataFrame, int]:
+def auto_apply_holiday_delivery_no(year: int, month: int, holiday_map: dict[int, str], del_df: pd.DataFrame, del_exists: set[int]):
     changed = 0
     for day in holiday_map.keys():
         if day in del_exists:
@@ -225,13 +251,10 @@ base_df = read_csv(BASE_MENU_PATH)
 chg_df = read_csv(CHANGE_MENU_PATH)
 del_df = read_csv(DELIVERY_PATH)
 idx_df = read_csv(MENU_INDEX_PATH)
-
 if idx_df.empty:
     idx_df = pd.DataFrame(columns=["name"])
-
-if "name" in idx_df.columns:
-    idx_df["name"] = idx_df["name"].astype(str).apply(norm_menu)
-    idx_df = idx_df[idx_df["name"].str.len() > 0].drop_duplicates().sort_values("name").reset_index(drop=True)
+idx_df["name"] = idx_df.get("name", "").astype(str).apply(norm_menu)
+idx_df = idx_df[idx_df["name"].str.len() > 0].drop_duplicates().sort_values("name").reset_index(drop=True)
 
 # -----------------------------
 # 사이드바
@@ -259,13 +282,9 @@ def make_backup_zip() -> bytes:
     return mem.read()
 
 with col_b1:
-    st.download_button(
-        "ZIP 백업 다운로드",
-        data=make_backup_zip(),
-        file_name=f"moms_menu_backup_{year:04d}{month:02d}.zip",
-        mime="application/zip",
-        use_container_width=True,
-    )
+    st.download_button("ZIP 백업 다운로드", data=make_backup_zip(),
+                       file_name=f"moms_menu_backup_{year:04d}{month:02d}.zip",
+                       mime="application/zip", use_container_width=True)
 
 with col_b2:
     up = st.file_uploader("ZIP 복원 업로드", type=["zip"], label_visibility="collapsed")
@@ -283,7 +302,6 @@ with col_b2:
                 ]:
                     if fname in names:
                         path.write_bytes(zf.read(fname))
-
                 for asset_name, path in [
                     ("assets/moms_logo.png", MOMS_LOGO_PATH),
                     ("assets/kapma_logo.png", KAPMA_LOGO_PATH),
@@ -291,16 +309,15 @@ with col_b2:
                 ]:
                     if asset_name in names:
                         path.write_bytes(zf.read(asset_name))
-
             st.sidebar.success("복원 완료! 즉시 반영됩니다.")
             st.rerun()
         except Exception as e:
             st.sidebar.error(f"복원 실패: {e}")
 
 # -----------------------------
-# 상단 헤더
+# 헤더
 # -----------------------------
-title_html = f"""
+components.html(f"""
 <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin:4px 0 10px 0;">
   <div style="line-height:1.08;">
     <div style="font-size:38px;font-weight:900;">맘스락 {month:02d}월</div>
@@ -312,39 +329,32 @@ title_html = f"""
     <div style="font-size:18px;font-weight:800;">{KAPMA_PHONE}</div>
   </div>
 </div>
-"""
-components.html(title_html, height=110)
+""", height=110)
 
 # -----------------------------
-# 로고/그림 설정
+# 로고/그림
 # -----------------------------
 with st.expander("로고/그림 설정(필요시)", expanded=False):
     c1, c2, c3 = st.columns(3)
     moms_up = c1.file_uploader("MOMS 로고 업로드 (png/jpg)", type=["png", "jpg", "jpeg"], key="moms_up")
     kapma_up = c2.file_uploader("동약협회 로고 업로드 (png/jpg)", type=["png", "jpg", "jpeg"], key="kapma_up")
     bowl_up = c3.file_uploader("그릇 그림 업로드 (png/jpg)", type=["png", "jpg", "jpeg"], key="bowl_up")
-
     if moms_up is not None:
-        MOMS_LOGO_PATH.write_bytes(moms_up.read())
-        st.success("MOMS 로고 저장됨 (assets/moms_logo.png)")
+        MOMS_LOGO_PATH.write_bytes(moms_up.read()); st.success("MOMS 로고 저장됨")
     if kapma_up is not None:
-        KAPMA_LOGO_PATH.write_bytes(kapma_up.read())
-        st.success("동약협회 로고 저장됨 (assets/kapma_logo.png)")
+        KAPMA_LOGO_PATH.write_bytes(kapma_up.read()); st.success("동약협회 로고 저장됨")
     if bowl_up is not None:
-        BOWL_PATH.write_bytes(bowl_up.read())
-        st.success("그릇 그림 저장됨 (assets/gongyang_bowl.png)")
+        BOWL_PATH.write_bytes(bowl_up.read()); st.success("그릇 그림 저장됨")
 
 gongyang = st.text_area("공양게(포스터/출력에 사용)", value=DEFAULT_GONGYANG, height=110)
-
 moms_logo_b64 = b64_image(MOMS_LOGO_PATH)
 kapma_logo_b64 = b64_image(KAPMA_LOGO_PATH)
 bowl_b64 = b64_image(BOWL_PATH)
 
 # -----------------------------
-# 메뉴 인덱스
+# 1) 메뉴 인덱스
 # -----------------------------
 st.subheader("1) 메뉴 인덱스 관리(가나다/사전순 자동정렬)")
-
 cidx1, cidx2 = st.columns([2, 1])
 with cidx1:
     new_item = st.text_input("새 메뉴 추가", placeholder="예) 소고기무국")
@@ -352,26 +362,19 @@ with cidx2:
     if st.button("인덱스에 추가", use_container_width=True):
         v = norm_menu(new_item)
         if v:
-            idx_df2 = pd.concat([idx_df, pd.DataFrame({"name": [v]})], ignore_index=True)
-            idx_df2["name"] = idx_df2["name"].astype(str).apply(norm_menu)
-            idx_df2 = idx_df2[idx_df2["name"].str.len() > 0].drop_duplicates().sort_values("name").reset_index(drop=True)
-            idx_df = idx_df2
+            idx_df = pd.concat([idx_df, pd.DataFrame({"name": [v]})], ignore_index=True)
+            idx_df["name"] = idx_df["name"].astype(str).apply(norm_menu)
+            idx_df = idx_df[idx_df["name"].str.len() > 0].drop_duplicates().sort_values("name").reset_index(drop=True)
             save_df(idx_df, MENU_INDEX_PATH)
             st.success("추가 및 저장 완료")
             st.rerun()
-
-if not idx_df.empty:
-    st.dataframe(idx_df, use_container_width=True, height=180)
-else:
-    st.info("메뉴 인덱스가 비어 있습니다. 위에서 추가하세요.")
-
+st.dataframe(idx_df, use_container_width=True, height=180)
 st.divider()
 
 # -----------------------------
 # 공휴일 자동 반영
 # -----------------------------
 holiday_map = load_holidays_map_for_month(year, month)
-
 base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
 del_df, holiday_auto_count = auto_apply_holiday_delivery_no(year, month, holiday_map, del_df, del_exists)
 if holiday_auto_count > 0:
@@ -380,22 +383,18 @@ if holiday_auto_count > 0:
     base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
 
 # -----------------------------
-# 월간 요약(통계)
+# 2) 월간 요약
 # -----------------------------
 st.subheader("2) 월간 요약(통계)")
-
 days_in_month = calendar.monthrange(year, month)[1]
-no_delivery_days = sorted([d for d, v in del_map.items() if v])
-no_delivery_cnt = len(no_delivery_days)
+no_delivery_cnt = len([d for d, v in del_map.items() if v])
 delivery_cnt = days_in_month - no_delivery_cnt
 chg_cnt = len([d for d, v in chg_map.items() if v])
 
 menus = []
 for d in range(1, days_in_month + 1):
-    if base_map.get(d):
-        menus.append(base_map[d])
-    if chg_map.get(d):
-        menus.append(chg_map[d])
+    if base_map.get(d): menus.append(base_map[d])
+    if chg_map.get(d): menus.append(chg_map[d])
 
 top_menu_df = pd.Series(menus, dtype="object").value_counts().head(10).reset_index()
 top_menu_df.columns = ["메뉴", "횟수"]
@@ -411,11 +410,10 @@ if not top_menu_df.empty:
     st.dataframe(top_menu_df, use_container_width=True, hide_index=True)
 else:
     st.info("이번 달 메뉴 입력이 아직 없습니다.")
-
 st.divider()
 
 # -----------------------------
-# 달력(1개월) + 날짜 클릭 입력
+# 3) 달력(1개월)
 # -----------------------------
 st.subheader("3) 달력(1개월) — 날짜 클릭 → 입력/저장")
 
@@ -423,15 +421,10 @@ STYLE = """
 <style>
   .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;}
   .cal-head{font-weight:900;opacity:0.85;text-align:center;padding:6px 0;}
-  .daybtn button{width:100% !important; text-align:left !important; border-radius:14px !important;
-    padding:10px 10px !important; min-height:112px !important; white-space:pre-line !important;
-    border:1px solid rgba(0,0,0,0.14) !important;}
 </style>
 """
 st.markdown(STYLE, unsafe_allow_html=True)
-
-dow = ["월", "화", "수", "목", "금", "토", "일"]
-components.html('<div class="cal-grid">' + "".join([f'<div class="cal-head">{d}</div>' for d in dow]) + "</div>", height=34)
+components.html('<div class="cal-grid">' + "".join([f'<div class="cal-head">{d}</div>' for d in ["월","화","수","목","금","토","일"]]) + "</div>", height=34)
 
 if "selected_day" not in st.session_state:
     st.session_state.selected_day = None
@@ -440,14 +433,10 @@ cal = calendar.Calendar(firstweekday=0)
 weeks = cal.monthdayscalendar(year, month)
 
 def cell_kind(day: int) -> str:
-    if day <= 0:
-        return "empty"
-    if del_map.get(day, False):
-        return "delivery"
-    if chg_map.get(day):
-        return "change"
-    if base_map.get(day):
-        return "base"
+    if day <= 0: return "empty"
+    if del_map.get(day, False): return "delivery"
+    if chg_map.get(day): return "change"
+    if base_map.get(day): return "base"
     return "none"
 
 def cell_css(kind: str) -> str:
@@ -460,17 +449,12 @@ def cell_css(kind: str) -> str:
     return "background: rgba(255,255,255,0.90) !important;"
 
 def cell_label(day: int) -> str:
-    if day <= 0:
-        return ""
+    if day <= 0: return ""
     lines = [f"{day:02d}"]
-    if day in holiday_map:
-        lines.append(f"🎌 {holiday_map[day]}")
-    if del_map.get(day, False):
-        lines.append("🚫 배달불요")
-    if chg_map.get(day):
-        lines.append(f"🔶 변경: {chg_map[day]}")
-    if base_map.get(day):
-        lines.append(f"▫ 기본: {base_map[day]}")
+    if day in holiday_map: lines.append(f"🎌 {holiday_map[day]}")
+    if del_map.get(day, False): lines.append("🚫 배달불요")
+    if chg_map.get(day): lines.append(f"🔶 변경: {chg_map[day]}")
+    if base_map.get(day): lines.append(f"▫ 기본: {base_map[day]}")
     return "\n".join(lines)
 
 for w in weeks:
@@ -494,8 +478,8 @@ if sel is not None:
     st.markdown("---")
     st.markdown(f"### 📌 선택한 날짜: {dsel.strftime('%Y-%m-%d')}" + (f"  (🎌 {holiday_map[sel]})" if is_holiday else ""))
 
-    left, right = st.columns([2, 1], gap="large")
     index_options = idx_df["name"].tolist() if (not idx_df.empty and "name" in idx_df.columns) else []
+    left, right = st.columns([2, 1], gap="large")
 
     with left:
         cA, cB = st.columns(2, gap="medium")
@@ -512,13 +496,12 @@ if sel is not None:
         if is_holiday and (sel not in del_exists) and (not delivery_no):
             st.warning("공휴일인데 ‘배달불요’가 해제되어 있습니다. 필요 시 다시 확인하세요.")
 
-        btn1, btn2, btn3 = st.columns(3)
-        with btn1:
+        b1, b2, b3 = st.columns(3)
+        with b1:
             if st.button("저장", use_container_width=True):
                 base_v = base_text if base_pick == "(선택안함)" else base_pick
                 chg_v = chg_text if chg_pick == "(선택안함)" else chg_pick
 
-                # ✅ global 금지(필요 없음) — 여기서 그냥 재할당하면 됩니다
                 base_df = upsert_date_value(base_df, "date", "base_menu", dsel, base_v)
                 chg_df = upsert_date_value(chg_df, "date", "change_menu", dsel, chg_v)
                 del_df = upsert_delivery(del_df, dsel, "Y" if delivery_no else "N")
@@ -531,12 +514,12 @@ if sel is not None:
                 st.success("저장 완료")
                 st.rerun()
 
-        with btn2:
+        with b2:
             if st.button("선택 취소", use_container_width=True):
                 st.session_state.selected_day = None
                 st.rerun()
 
-        with btn3:
+        with b3:
             if st.button("해당일 내용 삭제", use_container_width=True):
                 dstr = dsel.isoformat()
                 if not base_df.empty and "date" in base_df.columns:
@@ -545,11 +528,9 @@ if sel is not None:
                     chg_df = chg_df[chg_df["date"].astype(str) != dstr]
                 if not del_df.empty and "date" in del_df.columns:
                     del_df = del_df[del_df["date"].astype(str) != dstr]
-
                 save_df(base_df, BASE_MENU_PATH)
                 save_df(chg_df, CHANGE_MENU_PATH)
                 save_df(del_df, DELIVERY_PATH)
-
                 st.session_state.selected_day = None
                 st.success("삭제 완료")
                 st.rerun()
@@ -565,17 +546,7 @@ if sel is not None:
 st.divider()
 
 # -----------------------------
-# 공휴일 리스트(참고)
-# -----------------------------
-with st.expander("공휴일/휴무일 관리(holidays.csv)", expanded=False):
-    st.caption("형식: date(YYYY-MM-DD), name, auto_delivery_no(Y/N)")
-    hdf = read_csv(HOLIDAYS_PATH)
-    st.dataframe(hdf, use_container_width=True, height=220)
-
-st.divider()
-
-# -----------------------------
-# 포스터 미리보기 + A4 HTML 다운로드(깨짐 방지)
+# 포스터 + A4 HTML 다운로드(깨짐 방지)
 # -----------------------------
 st.subheader("4) 포스터(스크린샷용) 미리보기 / 5) 업체 전달용 파일 출력(A4 1페이지 최적화)")
 
@@ -583,29 +554,23 @@ st.subheader("4) 포스터(스크린샷용) 미리보기 / 5) 업체 전달용 �
 base_df = read_csv(BASE_MENU_PATH)
 chg_df = read_csv(CHANGE_MENU_PATH)
 del_df = read_csv(DELIVERY_PATH)
-
 base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
 holiday_map = load_holidays_map_for_month(year, month)
 
 def make_calendar_table_html(year: int, month: int) -> str:
     cal = calendar.Calendar(firstweekday=0)
     weeks = cal.monthdayscalendar(year, month)
-
     rows = []
     rows.append("<tr>" + "".join([f"<th>{d}</th>" for d in ["월","화","수","목","금","토","일"]]) + "</tr>")
-
     for w in weeks:
         tds = []
         for day in w:
             if day == 0:
                 tds.append("<td class='empty'></td>")
             else:
-                if del_map.get(day, False):
-                    cls = "delivery"
-                elif chg_map.get(day):
-                    cls = "change"
-                else:
-                    cls = "normal"
+                if del_map.get(day, False): cls = "delivery"
+                elif chg_map.get(day): cls = "change"
+                else: cls = "normal"
 
                 lines = [f"<div class='d'>{day:02d}</div>"]
                 if day in holiday_map:
@@ -616,23 +581,20 @@ def make_calendar_table_html(year: int, month: int) -> str:
                     lines.append(f"<div class='tag tag-chg'>🔶 {safe_text(chg_map[day])}</div>")
                 if base_map.get(day):
                     lines.append(f"<div class='tag tag-base'>▫ {safe_text(base_map[day])}</div>")
-
                 tds.append(f"<td class='{cls}'>" + "".join(lines) + "</td>")
         rows.append("<tr>" + "".join(tds) + "</tr>")
-
     return "<table class='cal'>" + "".join(rows) + "</table>"
 
 def make_poster_html(a4: bool = False) -> str:
     moms_img = f"data:image/png;base64,{moms_logo_b64}" if moms_logo_b64 else ""
     kapma_img = f"data:image/png;base64,{kapma_logo_b64}" if kapma_logo_b64 else ""
     bowl_img = f"data:image/png;base64,{bowl_b64}" if bowl_b64 else ""
-
     cal_html = make_calendar_table_html(year, month)
+
     page_w = "210mm" if a4 else "100%"
     page_h = "297mm" if a4 else "auto"
     pad = "10mm" if a4 else "14px"
 
-    # ✅ 깨짐 방지: charset meta 2종(브라우저 호환)
     return f"""
 <!doctype html>
 <html>
@@ -645,15 +607,10 @@ def make_poster_html(a4: bool = False) -> str:
     margin:0; padding:0; background:#f7f7f7;
     font-family: "Apple SD Gothic Neo","Malgun Gothic","맑은 고딕","Noto Sans KR",sans-serif;
   }}
-  .page {{
-    width:{page_w}; height:{page_h};
-    background:white; margin:0 auto; padding:{pad};
-    box-sizing:border-box;
-  }}
+  .page {{ width:{page_w}; height:{page_h}; background:white; margin:0 auto; padding:{pad}; box-sizing:border-box; }}
   .top {{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6mm; }}
   .brand {{ display:flex; align-items:center; gap:10px; border:1px solid rgba(0,0,0,0.10); border-radius:14px; padding:8px 10px; }}
   .brand img {{ height:44px; width:auto; display:block; }}
-  .brand .txt {{ line-height:1.05; }}
   .brand .txt .b1 {{ font-weight:900; font-size:20px; }}
   .brand .txt .b2 {{ font-weight:800; font-size:14px; opacity:0.85; white-space:nowrap; }}
   .title {{ text-align:center; margin:2mm 0 5mm 0; line-height:1.08; }}
@@ -669,7 +626,7 @@ def make_poster_html(a4: bool = False) -> str:
   table.cal td {{ vertical-align:top; border:1px solid rgba(0,0,0,0.12); border-radius:14px; padding:8px 8px;
                  height:{'26mm' if a4 else '110px'}; overflow:hidden; }}
   td.empty {{ border:none; background:transparent; }}
-  td.normal {{ background:rgba(255,255,255,1); }}
+  td.normal {{ background:white; }}
   td.change {{ background:rgba(255,180,0,0.10); border-color:rgba(255,180,0,0.35); }}
   td.delivery {{ background:rgba(255,0,0,0.08); border-color:rgba(255,0,0,0.35); }}
   .d {{ font-weight:900; font-size:16px; margin-bottom:4px; }}
@@ -720,34 +677,28 @@ def make_poster_html(a4: bool = False) -> str:
 poster_html = make_poster_html(a4=False)
 components.html(poster_html, height=920, scrolling=True)
 
-# ✅ 깨짐 방지 핵심: utf-8-sig(BOM)로 다운로드
+# ✅ 파일 깨짐 방지: utf-8-sig(BOM)로 내려받기
 a4_html = make_poster_html(a4=True)
 st.download_button(
     "업체 전달용 HTML 다운로드(A4 1페이지 최적화)",
     data=a4_html.encode("utf-8-sig"),
     file_name=f"맘스락_{year:04d}{month:02d}_식단변경_A4.html",
     mime="text/html; charset=utf-8",
-    use_container_width=True
+    use_container_width=True,
 )
 
-with st.expander("✅ 포스터 파일이 깨져 보일 때(필수)", expanded=False):
+with st.expander("포스터 파일이 깨져 보일 때", expanded=False):
     st.markdown(
         """
-- 다운로드한 HTML은 **반드시 크롬/엣지로 열어야 합니다.** (메모장/한글/워드로 열면 깨져 보입니다)
-- 그래도 깨지면:
-  - 크롬에서 **파일 끌어다 놓기**로 열기
-  - 또는 크롬 주소창에 `file:///C:/.../파일명.html` 로 직접 열기
-- PDF로 만들기: HTML을 크롬에서 연 뒤 **Ctrl+P → Microsoft Print to PDF**
+- HTML은 **메모장/한글/워드가 아니라 크롬/엣지로 열어야 정상**입니다.
+- 크롬에서 열기: 파일을 크롬 창으로 **끌어다 놓기**
+- PDF 만들기: 크롬에서 연 뒤 **Ctrl+P → Microsoft Print to PDF**
         """
     )
 
 st.divider()
 
-# -----------------------------
-# 업체 문자용 텍스트
-# -----------------------------
 st.subheader("6) 업체 문자 전송용 텍스트(복사해서 전송)")
-
 def build_message_text(year: int, month: int) -> str:
     lines = []
     lines.append("동약협회입니다.")
@@ -772,4 +723,3 @@ def build_message_text(year: int, month: int) -> str:
     return "\n".join(lines)
 
 st.text_area("복사용", value=build_message_text(year, month), height=220)
-st.caption("위 내용을 그대로 복사해서 도시락 업체에 보내시면 됩니다.")
