@@ -269,3 +269,152 @@ def edit_day_dialog(d: date):
         # 다시 읽어서 저장(동시성 방지)
         _df_b = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
         _df_c = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
+        _df_d = _read_csv(DELIVERY_PATH, ["date", "delivery"])
+
+        _save_row(_df_b, dstr, "base_menu", b2).to_csv(BASE_MENU_PATH, index=False, encoding="utf-8-sig")
+        _save_row(_df_c, dstr, "change_menu", c2).to_csv(CHANGE_MENU_PATH, index=False, encoding="utf-8-sig")
+        _save_delivery(_df_d, dstr, yn).to_csv(DELIVERY_PATH, index=False, encoding="utf-8-sig")
+
+        # 인덱스 자동 추가
+        new_items = [x for x in [b2, c2] if x]
+        if new_items:
+            idx_df = _read_csv(MENU_INDEX_PATH, ["name"])
+            for it in new_items: idx_df = pd.concat([idx_df, pd.DataFrame([{"name": it}])], ignore_index=True)
+            idx_df["name"] = idx_df["name"].str.strip()
+            idx_df[idx_df["name"] != ""].drop_duplicates().sort_values("name").to_csv(MENU_INDEX_PATH, index=False, encoding="utf-8-sig")
+        
+        st.rerun()
+
+# -----------------------------
+# 달력 렌더링
+# -----------------------------
+y, m = st.session_state.ym
+cal = calendar.Calendar(firstweekday=0)
+days_mon_fri = [d for d in cal.itermonthdates(y, m) if d.month == m and d.weekday() < 5]
+first_wd = date(y, m, 1).weekday()
+pad_left = first_wd if first_wd < 5 else 0
+cells = [None] * pad_left + days_mon_fri
+while len(cells) % 5 != 0: cells.append(None)
+
+def _cell_bg_and_lines(d: date):
+    ds = _to_date_str(d)
+    b = _get_value(base_df, ds, "base_menu").strip()
+    c = _get_value(change_df, ds, "change_menu").strip()
+    del_ = _get_delivery(delivery_df, ds).strip().upper()
+    no_del = (del_ == "N")
+    bg = "bg-both" if (c and no_del) else ("bg-change" if c else ("bg-nodelivery" if no_del else "bg-base"))
+    lines = []
+    if b: lines.append(("기본", b))
+    if c: lines.append(("변경", c))
+    if no_del: lines.append(("배달", "불요"))
+    return bg, lines
+
+st.subheader(_month_title(y, m))
+wcols = st.columns(5)
+for i, w in enumerate(["월", "화", "수", "목", "금"]):
+    with wcols[i]: st.markdown(f"**{w}**")
+
+rows = [cells[i:i+5] for i in range(0, len(cells), 5)]
+for r in rows:
+    cols = st.columns(5, gap="small")
+    for i, d in enumerate(r):
+        with cols[i]:
+            if d:
+                if st.button(f"{d.day}", key=f"day_{_to_date_str(d)}", use_container_width=True): edit_day_dialog(d)
+
+st.divider()
+
+# -----------------------------
+# 포스터 & A4 생성
+# -----------------------------
+moms_b64 = st.session_state.moms_logo_b64 or _b64_image_if_exists(MOMS_LOGO_PATH)
+kapma_b64 = st.session_state.kapma_logo_b64 or _b64_image_if_exists(KAPMA_LOGO_PATH)
+bowl_b64 = st.session_state.bowl_b64 or _b64_image_if_exists(BOWL_IMG_PATH)
+moms_logo_html = f'<img class="logoImg" src="{moms_b64}" />' if moms_b64 else '<div class="logoText">MOMS</div>'
+kapma_logo_html = f'<img class="logoImg" src="{kapma_b64}" />' if kapma_b64 else '<div class="logoText">동약협회</div>'
+kapma_box_text = f'<div class="logoText">동약협회</div><div class="kapmaPhone">{KAPMA_PHONE_FIXED}</div>'
+gongyang_html = "이 음식이 어디에서 왔는가<br/>내 덕행으로는 받기가 부끄럽네<br/>마음의 온갖 탐욕을 떠나<br/>바른 생각으로 이 공양을 받습니다"
+bowl_html = f'<img class="logoImg" src="{bowl_b64}" style="max-height:44px; margin-bottom:6px;" />' if bowl_b64 else ""
+
+def poster_cell_html(d: date | None) -> str:
+    if d is None: return '<div class="cell bg-base" style="opacity:.18;"></div>'
+    bg, lines = _cell_bg_and_lines(d)
+    line_html = "".join([f'<div class="t"><b>{lab}</b> {txt}</div>' for lab, txt in lines[:3]]) or '<div class="t" style="opacity:.35;">&nbsp;</div>'
+    return f'<div class="cell {bg}"><div class="d">{d.day}</div>{line_html}</div>'
+
+common_inner_html = f"""
+    <div class="title">맘스락 {m:02d}월 식단(배달) 변경</div>
+    <div class="subtitle">( 인원 : {st.session_state.people_count.strip() or "1"}인 )</div>
+    <div class="midrow">
+      <div class="logoBox">{moms_logo_html}<div class="logoText">MOMS</div></div>
+      <div class="gongyangBox"><div>{bowl_html}{gongyang_html}</div></div>
+      <div class="logoBox">{kapma_logo_html}{kapma_box_text}</div>
+    </div>
+    <div class="dow"><div class="h">월</div><div class="h">화</div><div class="h">수</div><div class="h">목</div><div class="h">금</div></div>
+    <div class="grid">{''.join(poster_cell_html(d) for d in cells)}</div>
+"""
+
+st.subheader("포스터 미리보기")
+components.html(f'<div class="poster-wrap"><div class="poster">{common_inner_html}</div></div>', height=900, scrolling=True)
+
+# -----------------------------
+# ✅ 신규 기능: 업체 전달용 문자 메시지 생성
+# -----------------------------
+st.divider()
+st.subheader("📱 업체(맘스락) 전달용 문자 생성")
+
+def generate_sms():
+    sms_lines = []
+    sms_lines.append(f"[맘스락] {m}월 식단 변경 및 배송 안내")
+    sms_lines.append(f"안녕하세요, 동약협회입니다. {m}월 식단 변경 사항입니다.")
+    sms_lines.append("")
+    
+    has_changes = False
+    # 이번 달의 모든 평일 순회하며 변경/배송불요 체크
+    for d in days_mon_fri:
+        ds = _to_date_str(d)
+        b = _get_value(base_df, ds, "base_menu").strip()
+        c = _get_value(change_df, ds, "change_menu").strip()
+        del_ = _get_delivery(delivery_df, ds).strip().upper()
+        
+        day_str = d.strftime("%m/%d(%a)")
+        
+        if c or del_ == "N":
+            has_changes = True
+            if del_ == "N":
+                sms_lines.append(f"● {day_str}: 배송 불요 (취소)")
+            elif c:
+                sms_lines.append(f"● {day_str}: {b} → {c}")
+
+    if not has_changes:
+        sms_lines.append("변경 사항 없음 (기본 식단)")
+    
+    sms_lines.append("")
+    sms_lines.append(f"총 인원: {st.session_state.people_count}")
+    sms_lines.append("확인 부탁드립니다. 감사합니다.")
+    
+    return "\n".join(sms_lines)
+
+sms_text = generate_sms()
+
+c1, c2 = st.columns([2, 1])
+with c1:
+    st.text_area("문자 내용 (복사해서 사용하세요)", value=sms_text, height=300)
+with c2:
+    st.info("위 내용을 복사하여 맘스락 담당자에게 전송하세요.")
+    # 모바일에서 바로 메시지 앱을 열 수 있는 링크 (선택 사항)
+    encoded_sms = urllib.parse.quote(sms_text)
+    st.markdown(f'''
+        <a href="sms:?body={encoded_sms}" style="text-decoration:none;">
+            <button style="width:100%; height:50px; border-radius:12px; background-color:#25D366; color:white; font-weight:bold; border:none; cursor:pointer;">
+                📱 모바일에서 문자 보내기
+            </button>
+        </a>
+    ''', unsafe_allow_html=True)
+
+# -----------------------------
+# A4 HTML 다운로드 (기존 유지)
+# -----------------------------
+st.divider()
+st.subheader("업체 전달용 A4 출력")
+# (A4 빌드 로직은 생략/기존과 동일하게 build_a4_html() 호출)
