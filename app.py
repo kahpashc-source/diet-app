@@ -14,26 +14,33 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+# -----------------------------
+# 기본 설정
+# -----------------------------
 st.set_page_config(page_title="맘스락 식단 변경 프로그램", layout="wide")
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-BASE_MENU_PATH = DATA_DIR / "base_menu.csv"
-CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"
-DELIVERY_PATH = DATA_DIR / "delivery.csv"
-MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"
+BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
+CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
+DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N) -> N=배달불요
+MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
 ASSETS_DIR = APP_DIR / "assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-
 MOMS_LOGO_PATH = ASSETS_DIR / "moms_logo.png"
 KAPMA_LOGO_PATH = ASSETS_DIR / "kapma_logo.png"
 BOWL_IMG_PATH = ASSETS_DIR / "gongyang_bowl.png"
 
-KAPMA_PHONE = "010-7101-5871"
+KAPMA_PHONE = "010-7101-5871"  # ✅ 고정
 
+WK = ["월", "화", "수", "목", "금", "토", "일"]
+
+# -----------------------------
+# 유틸
+# -----------------------------
 def _ensure_csv(path: Path, columns: list[str]) -> None:
     if not path.exists():
         pd.DataFrame(columns=columns).to_csv(path, index=False, encoding="utf-8-sig")
@@ -99,6 +106,7 @@ def _load_state():
     if "ym" not in st.session_state:
         today = date.today()
         st.session_state.ym = (today.year, today.month)
+    # 로고/그릇 업로드(선택)
     if "moms_logo_b64" not in st.session_state:
         st.session_state.moms_logo_b64 = None
     if "kapma_logo_b64" not in st.session_state:
@@ -108,6 +116,9 @@ def _load_state():
 
 _load_state()
 
+# -----------------------------
+# 데이터 로드
+# -----------------------------
 base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
 change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
 delivery_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
@@ -118,18 +129,30 @@ menu_index_df = menu_index_df[menu_index_df["name"] != ""].drop_duplicates().sor
 menu_index_df.to_csv(MENU_INDEX_PATH, index=False, encoding="utf-8-sig")
 MENU_INDEX = menu_index_df["name"].tolist()
 
+# -----------------------------
+# CSS
+# -----------------------------
 st.markdown(
     """
 <style>
 .block-container { padding-top: 1rem; padding-bottom: 2rem; }
 div.stButton > button { width:100%; border-radius: 12px !important; font-weight: 800 !important; }
 
-@import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
-
+/* ===== 포스터(스크린샷용) : 달력형태 ===== */
 .poster-wrap{ width:100%; display:flex; justify-content:center; }
-.poster{ width: 980px; background:#fff; padding: 14px 14px 16px 14px; }
+.poster{
+  width: 980px;
+  background:#fff;
+  padding: 14px 14px 16px 14px;
+}
 
-.topbar{ display:grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 12px; align-items:center; margin-bottom: 10px; }
+.topbar{
+  display:grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  gap: 12px;
+  align-items:center;
+  margin-bottom: 12px;
+}
 .logoBox{
   border: 2px solid rgba(0,0,0,0.20);
   border-radius: 18px;
@@ -144,12 +167,26 @@ div.stButton > button { width:100%; border-radius: 12px !important; font-weight:
 .logoText{ font-weight: 900; font-size: 22px; }
 .kapmaPhone{ font-weight: 900; font-size: 14px; opacity: .80; margin-top: 2px; }
 
-.title{ text-align:center; font-weight: 900; font-size: 34px; line-height: 1.10; }
+.title{
+  text-align:center;
+  font-weight: 900;
+  font-size: 34px;
+  line-height: 1.10;
+}
 
-.dow{ display:grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 10px 0 8px 0; }
+.dow{
+  display:grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin: 6px 0 8px 0;
+}
 .dow div{ text-align:center; font-weight: 900; }
 
-.grid{ display:grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.grid{
+  display:grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
 
 .cell{
   border: 2px solid rgba(0,0,0,0.25);
@@ -159,11 +196,26 @@ div.stButton > button { width:100%; border-radius: 12px !important; font-weight:
   background: #fff;
   position: relative;
 }
-.cell.empty{ border: 2px dashed rgba(0,0,0,0.25); background: rgba(255,255,255,0.60); }
-.cell.change{ background: rgba(255, 245, 180, 0.65); border-color: rgba(210,140,0,0.55); }
-.cell.nodelivery{ background: rgba(255, 220, 220, 0.55); border-color: rgba(220,0,0,0.50); }
+.cell.empty{
+  border: 2px dashed rgba(0,0,0,0.25);
+  background: rgba(255,255,255,0.60);
+}
 
-.dayrow{ display:flex; align-items:flex-end; gap: 8px; margin-bottom: 4px; }
+.cell.change{
+  background: rgba(255, 245, 180, 0.65);
+  border-color: rgba(210,140,0,0.55);
+}
+.cell.nodelivery{
+  background: rgba(255, 220, 220, 0.55);
+  border-color: rgba(220,0,0,0.50);
+}
+
+.dayrow{
+  display:flex;
+  align-items:flex-end;
+  gap: 8px;
+  margin-bottom: 4px;
+}
 .daynum{ font-weight: 900; font-size: 18px; }
 .daywk{ font-weight: 900; font-size: 12px; opacity: .70; }
 
@@ -181,15 +233,26 @@ div.stButton > button { width:100%; border-radius: 12px !important; font-weight:
 .badge.red{ color: #c50000; border-color: rgba(197,0,0,0.35); }
 .badge.orange{ color: #b85c00; border-color: rgba(184,92,0,0.35); }
 
-.baseText{ font-weight: 900; font-size: 14px; margin-top: 6px; }
-.changeText{ font-weight: 900; font-size: 14px; margin-top: 6px; color: #c50000; }
+.baseText{
+  font-weight: 900;
+  font-size: 14px;
+  margin-top: 6px;
+}
+.changeText{
+  font-weight: 900;
+  font-size: 14px;
+  margin-top: 6px;
+  color: #c50000;
+}
 
+/* ===== A4 출력용 ===== */
+@import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
 .gongyangBox{
   border: 1px dashed rgba(0,0,0,0.25);
   border-radius: 16px;
   padding: 10px 12px;
   font-family: 'Nanum Brush Script','궁서','Gungsuh',serif;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1.18;
   text-align:center;
 }
@@ -200,17 +263,21 @@ div.stButton > button { width:100%; border-radius: 12px !important; font-weight:
     unsafe_allow_html=True,
 )
 
+# -----------------------------
+# 상단 UI
+# -----------------------------
 st.title("맘스락 식단 변경 프로그램")
 
-c1, c2 = st.columns([1.0, 1.8], vertical_alignment="center")
-with c1:
+left, right = st.columns([1.0, 1.8], vertical_alignment="center")
+
+with left:
     y, m = st.session_state.ym
     month_options = [(yy, mm) for yy in range(date.today().year - 1, date.today().year + 3) for mm in range(1, 13)]
     idx = month_options.index((y, m)) if (y, m) in month_options else 0
     st.session_state.ym = st.selectbox("월 선택", month_options, index=idx, format_func=lambda x: f"{x[0]}-{x[1]:02d}")
 
-with c2:
-    st.caption("로고 업로드(선택) — 업로드하면 포스터/A4에 즉시 반영됩니다. (없으면 assets 폴더 파일 사용)")
+with right:
+    st.caption("로고/그릇 업로드(선택) — 업로드하면 포스터/A4에 즉시 반영됩니다. (없으면 assets 폴더 파일 사용)")
     u1, u2, u3 = st.columns(3)
     with u1:
         up = st.file_uploader("MOMS 로고", type=["png", "jpg", "jpeg"], key="up_moms")
@@ -221,13 +288,15 @@ with c2:
         if up is not None:
             st.session_state.kapma_logo_b64 = _b64_bytes(up.read(), up.name.split(".")[-1])
     with u3:
-        up = st.file_uploader("그릇 그림(출력용)", type=["png", "jpg", "jpeg"], key="up_bowl")
+        up = st.file_uploader("그릇 그림(A4용)", type=["png", "jpg", "jpeg"], key="up_bowl")
         if up is not None:
             st.session_state.bowl_b64 = _b64_bytes(up.read(), up.name.split(".")[-1])
 
 st.divider()
 
+# -----------------------------
 # 백업/복원
+# -----------------------------
 b1, b2 = st.columns(2)
 with b1:
     if st.button("백업 ZIP 만들기"):
@@ -237,9 +306,12 @@ with b1:
                 if p.exists():
                     z.writestr(p.name, p.read_bytes())
         mem.seek(0)
-        st.download_button("ZIP 다운로드", data=mem.getvalue(),
-                           file_name=f"moms_diet_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                           mime="application/zip")
+        st.download_button(
+            "ZIP 다운로드",
+            data=mem.getvalue(),
+            file_name=f"moms_diet_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+            mime="application/zip",
+        )
 with b2:
     up = st.file_uploader("백업 ZIP 복원", type=["zip"], key="up_zip")
     if up is not None:
@@ -256,6 +328,9 @@ with b2:
 
 st.divider()
 
+# -----------------------------
+# 입력 다이얼로그
+# -----------------------------
 @st.dialog("식단 입력")
 def edit_day_dialog(d: date):
     dstr = _to_date_str(d)
@@ -294,9 +369,13 @@ def edit_day_dialog(d: date):
         change_text = c_pick
 
     st.markdown("**배달**")
-    del_opt = st.radio("배달 여부", ["배달", "배달불요"],
-                       index=0 if (cur_del or "Y") != "N" else 1,
-                       horizontal=True, key=f"del_{dstr}")
+    del_opt = st.radio(
+        "배달 여부",
+        ["배달", "배달불요"],
+        index=0 if (cur_del or "Y") != "N" else 1,
+        horizontal=True,
+        key=f"del_{dstr}",
+    )
     yn = "Y" if del_opt == "배달" else "N"
 
     st.divider()
@@ -318,6 +397,7 @@ def edit_day_dialog(d: date):
             change_df2.to_csv(CHANGE_MENU_PATH, index=False, encoding="utf-8-sig")
             delivery_df2.to_csv(DELIVERY_PATH, index=False, encoding="utf-8-sig")
 
+            # 인덱스 누적
             new_items = [x for x in [base_text2, change_text2] if x]
             if new_items:
                 idx_df = _read_csv(MENU_INDEX_PATH, ["name"])
@@ -332,17 +412,19 @@ def edit_day_dialog(d: date):
         if st.button("닫기", use_container_width=True):
             st.rerun()
 
-# 달력 셀
+# -----------------------------
+# 달력(월~금) 셀 구성
+# -----------------------------
 y, m = st.session_state.ym
 cal = calendar.Calendar(firstweekday=0)
+
 days_mon_fri = [d for d in cal.itermonthdates(y, m) if d.month == m and d.weekday() < 5]
-first_wd = date(y, m, 1).weekday()
+first_wd = date(y, m, 1).weekday()  # 월=0
 pad_left = first_wd if first_wd < 5 else 0
+
 cells = [None] * pad_left + days_mon_fri
 while len(cells) % 5 != 0:
     cells.append(None)
-
-WK = ["월", "화", "수", "목", "금", "토", "일"]
 
 def _status(d: date):
     ds = _to_date_str(d)
@@ -352,7 +434,9 @@ def _status(d: date):
     nodel = (delv == "N")
     return base, chg, nodel
 
-# 입력용 달력(클릭)
+# -----------------------------
+# 입력용 달력(날짜 버튼)
+# -----------------------------
 st.subheader(_month_title(y, m))
 wcols = st.columns(5)
 for i, w in enumerate(["월", "화", "수", "목", "금"]):
@@ -372,17 +456,22 @@ for r in rows:
 
 st.divider()
 
-# 로고 b64
+# -----------------------------
+# 로고 b64 결정(업로드 우선 -> assets fallback)
+# -----------------------------
 moms_b64 = st.session_state.moms_logo_b64 or _b64_image_if_exists(MOMS_LOGO_PATH)
 kapma_b64 = st.session_state.kapma_logo_b64 or _b64_image_if_exists(KAPMA_LOGO_PATH)
 bowl_b64 = st.session_state.bowl_b64 or _b64_image_if_exists(BOWL_IMG_PATH)
 
-def _logo_block(b64: str | None, label: str) -> str:
-    # ✅ 중복 방지: 로고가 있으면 이미지만, 없으면 텍스트만
+def _logo_img_or_text(b64: str | None, label: str) -> str:
+    # ✅ 중복 방지: 로고 있으면 이미지, 없으면 텍스트 1번만
     if b64:
         return f'<img src="{b64}" alt="{label}" />'
     return f'<div class="logoText">{label}</div>'
 
+# -----------------------------
+# ✅ 포스터(스크린샷용) : "달력 형태"만 (공양게 없음)
+# -----------------------------
 def poster_calendar_html() -> str:
     def cell_html(d: date | None) -> str:
         if d is None:
@@ -391,11 +480,13 @@ def poster_calendar_html() -> str:
         base, chg, nodel = _status(d)
         cls = "cell"
         badges = ""
+
         if nodel:
             cls += " nodelivery"
             badges += '<span class="badge red">배달불요</span>'
         if chg:
             cls += " change"
+            # 배달불요와 겹치면 아래로 한 칸 내려서 표시
             badges += '<span class="badge orange" style="right:10px; top:40px;">변경</span>' if nodel else '<span class="badge orange">변경</span>'
 
         base_line = f'<div class="baseText">{base}</div>' if base else ""
@@ -420,14 +511,14 @@ def poster_calendar_html() -> str:
   <div class="poster">
     <div class="topbar">
       <div class="logoBox">
-        {_logo_block(moms_b64, "MOMS")}
+        {_logo_img_or_text(moms_b64, "MOMS")}
         {"<div class='logoText'>MOMS</div>" if moms_b64 else ""}
       </div>
 
       <div class="title">{title}</div>
 
       <div class="logoBox" style="flex-direction:row; justify-content:center;">
-        {_logo_block(kapma_b64, "동약협회")}
+        {_logo_img_or_text(kapma_b64, "동약협회")}
         <div style="display:flex; flex-direction:column; align-items:flex-start;">
           <div class="logoText">동약협회</div>
           <div class="kapmaPhone">{KAPMA_PHONE}</div>
@@ -435,23 +526,23 @@ def poster_calendar_html() -> str:
       </div>
     </div>
 
-    <div class="dow">
-      <div>월</div><div>화</div><div>수</div><div>목</div><div>금</div>
-    </div>
-
-    <div class="grid">
-      {''.join(cell_html(d) for d in cells)}
-    </div>
+    <div class="dow"><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div></div>
+    <div class="grid">{''.join(cell_html(d) for d in cells)}</div>
   </div>
 </div>
 """
 
 st.subheader("포스터(스크린샷용) 미리보기")
-components.html(poster_calendar_html(), height=880, scrolling=True)
+components.html(poster_calendar_html(), height=820, scrolling=False)
 
-# A4 출력(공양게/그릇 포함): ✅ 중복 제거된 로고박스 사용
+st.divider()
+
+# -----------------------------
+# ✅ 출력파일(A4 1페이지) : 공양게/그릇그림 포함 (중복 없음)
+# -----------------------------
 def a4_html_with_gongyang() -> str:
     title = f"맘스락 {m:02d}월 식단 변경"
+
     gong = (
         "이 음식이 어디에서 왔는가<br/>"
         "내 덕행으로는 받기가 부끄럽네<br/>"
@@ -467,6 +558,7 @@ def a4_html_with_gongyang() -> str:
         base, chg, nodel = _status(d)
         cls = "cell"
         badges = ""
+
         if nodel:
             cls += " nodelivery"
             badges += '<span class="badge red">배달불요</span>'
@@ -489,15 +581,17 @@ def a4_html_with_gongyang() -> str:
 </div>
 """
 
-    moms_box = f"""
+    # A4는 “제목 → (좌 로고 / 공양게 / 우 로고+전화) → 달력”
+    # 텍스트 중복이 생기지 않도록: 로고 있으면 이미지+하단 텍스트 1회, 로고 없으면 텍스트 1회만
+    moms_block = f"""
 <div class="logoBox">
-  {_logo_block(moms_b64, "MOMS")}
+  {_logo_img_or_text(moms_b64, "MOMS")}
   {"<div class='logoText'>MOMS</div>" if moms_b64 else ""}
 </div>
 """
-    kapma_box = f"""
+    kapma_block = f"""
 <div class="logoBox" style="flex-direction:row; justify-content:center;">
-  {_logo_block(kapma_b64, "동약협회")}
+  {_logo_img_or_text(kapma_b64, "동약협회")}
   <div style="display:flex; flex-direction:column; align-items:flex-start;">
     <div class="logoText">동약협회</div>
     <div class="kapmaPhone">{KAPMA_PHONE}</div>
@@ -515,26 +609,36 @@ def a4_html_with_gongyang() -> str:
 @page {{ size:A4; margin: 12mm; }}
 * {{ box-sizing: border-box; }}
 body {{ margin:0; font-family: "Malgun Gothic","Apple SD Gothic Neo",sans-serif; }}
+
 {""}
 </style>
 </head>
 <body>
-  <div class="title" style="margin: 0 0 8px 0;">{title}</div>
-  <div class="midrow" style="display:grid; grid-template-columns: 1fr 1.2fr 1fr; gap:10px; margin-bottom:8px; align-items:stretch;">
-    {moms_box}
+  <div class="title" style="text-align:center; font-weight:900; font-size:22px; margin:0 0 10px 0;">{title}</div>
+
+  <div style="display:grid; grid-template-columns: 1fr 1.2fr 1fr; gap:10px; align-items:stretch; margin-bottom:10px;">
+    {moms_block}
     <div class="gongyangBox"><div>{bowl}{gong}</div></div>
-    {kapma_box}
+    {kapma_block}
   </div>
 
-  <div class="dow"><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div></div>
-  <div class="grid">{''.join(cell_html(d) for d in cells)}</div>
+  <div class="dow" style="display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin:6px 0 8px 0;">
+    <div style="text-align:center; font-weight:900;">월</div>
+    <div style="text-align:center; font-weight:900;">화</div>
+    <div style="text-align:center; font-weight:900;">수</div>
+    <div style="text-align:center; font-weight:900;">목</div>
+    <div style="text-align:center; font-weight:900;">금</div>
+  </div>
+
+  <div class="grid" style="display:grid; grid-template-columns:repeat(5,1fr); gap:10px;">
+    {''.join(cell_html(d) for d in cells)}
+  </div>
 </body>
 </html>
 """
 
 a4_html = a4_html_with_gongyang()
 
-st.divider()
 st.subheader("출력파일(A4 1페이지) — 공양게/그릇그림 포함")
 d1, d2 = st.columns([1.0, 1.6])
 with d1:
