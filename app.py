@@ -34,7 +34,7 @@ MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 ASSETS_DIR = APP_DIR / "assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-# 로고/이미지 파일 (없으면 텍스트로 대체 표시)
+# 로고/이미지 파일 (없으면 텍스트로 대체)
 MOMS_LOGO_PATH = ASSETS_DIR / "moms_logo.png"
 KAPMA_LOGO_PATH = ASSETS_DIR / "kapma_logo.png"
 BOWL_IMG_PATH = ASSETS_DIR / "gongyang_bowl.png"  # 그릇 그림
@@ -72,23 +72,7 @@ def _b64_image_if_exists(path: Path) -> str | None:
 
 
 def _normalize_menu_text(s: str) -> str:
-    s = (s or "").strip()
-    return s
-
-
-def _sorted_unique_menu_index(series: pd.Series) -> list[str]:
-    items = sorted({x.strip() for x in series.fillna("").astype(str).tolist() if x.strip()})
-    return items
-
-
-def _load_state():
-    if "ym" not in st.session_state:
-        today = date.today()
-        st.session_state.ym = (today.year, today.month)
-    if "selected_date" not in st.session_state:
-        st.session_state.selected_date = None
-    if "people_count" not in st.session_state:
-        st.session_state.people_count = "1"  # 기본 1인
+    return (s or "").strip()
 
 
 def _save_row(df: pd.DataFrame, key_date: str, col: str, value: str) -> pd.DataFrame:
@@ -132,6 +116,14 @@ def _month_title(year: int, month: int) -> str:
     return f"{year}년 {month:02d}월"
 
 
+def _load_state():
+    if "ym" not in st.session_state:
+        today = date.today()
+        st.session_state.ym = (today.year, today.month)
+    if "people_count" not in st.session_state:
+        st.session_state.people_count = "1"
+
+
 # -----------------------------
 # 데이터 로드
 # -----------------------------
@@ -142,37 +134,26 @@ change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
 delivery_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
 menu_index_df = _read_csv(MENU_INDEX_PATH, ["name"])
 
-# 메뉴 인덱스 자동 정렬(가나다 느낌: 기본 정렬)
+# 메뉴 인덱스 자동 정렬
 menu_index_df["name"] = menu_index_df["name"].fillna("").astype(str).str.strip()
 menu_index_df = menu_index_df[menu_index_df["name"] != ""].drop_duplicates().sort_values("name")
 menu_index_df.to_csv(MENU_INDEX_PATH, index=False, encoding="utf-8-sig")
-
 MENU_INDEX = menu_index_df["name"].tolist()
 
 # -----------------------------
-# 공통 CSS (시각화 강화)
+# CSS (시각화 강화)
 # -----------------------------
 st.markdown(
     """
 <style>
-/* 페이지 전체 여백 살짝 정리 */
 .block-container { padding-top: 1.0rem; padding-bottom: 2.2rem; }
 
-/* 달력 셀 */
 .cal-cell{
   border: 1px solid rgba(0,0,0,0.12);
   border-radius: 14px;
-  padding: 10px 10px 10px 10px;
+  padding: 10px;
   min-height: 138px;
   background: rgba(255,255,255,0.90);
-}
-.cal-cell .dayline{
-  display:flex; align-items:center; justify-content:space-between;
-  margin-bottom: 6px;
-}
-.cal-cell .daynum{
-  font-weight: 900;
-  font-size: 20px;
 }
 .badge{
   display:inline-block;
@@ -183,14 +164,11 @@ st.markdown(
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.65);
 }
-
-/* 상태별 배경(최대한 깔끔하게, 과한 이모티콘/표식 최소화) */
 .bg-base { background: rgba(255,255,255,0.92); }
 .bg-change { background: rgba(255, 245, 180, 0.55); }
 .bg-nodelivery { background: rgba(255, 205, 205, 0.50); }
 .bg-both { background: linear-gradient(135deg, rgba(255,245,180,0.55), rgba(255,205,205,0.50)); }
 
-/* 내용 라인 */
 .itemline{
   font-size: 13px;
   line-height: 1.25;
@@ -203,7 +181,6 @@ st.markdown(
   opacity: 0.85;
 }
 
-/* 날짜 버튼 */
 div.stButton > button{
   width: 100%;
   border-radius: 12px !important;
@@ -211,42 +188,27 @@ div.stButton > button{
   font-weight: 800 !important;
 }
 
-/* 포스터(스크린샷) 컨테이너 */
-.poster-wrap{
-  width: 100%;
-  display:flex;
-  justify-content:center;
-}
+.poster-wrap{ width:100%; display:flex; justify-content:center; }
 .poster{
-  width: 100%;
-  max-width: 900px;
-  background: #fff;
-  border-radius: 18px;
+  width:100%; max-width:900px;
+  background:#fff;
+  border-radius:18px;
   border: 1px solid rgba(0,0,0,0.10);
-  padding: 18px 18px 14px 18px;
+  padding:18px 18px 14px 18px;
 }
-.poster .toprow{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap: 14px;
-}
+.poster .toprow{ display:flex; align-items:center; justify-content:space-between; gap:14px; }
 .poster .logoBox{
   width: 33%;
   border: 1px solid rgba(0,0,0,0.10);
   border-radius: 16px;
-  padding: 10px 10px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
+  padding: 10px;
+  display:flex; align-items:center; justify-content:center;
   min-height: 92px;
 }
 .poster .midBox{
   width: 34%;
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
   gap: 10px;
 }
 .poster .title{
@@ -276,18 +238,9 @@ div.stButton > button{
   min-height: 120px;
   background: rgba(255,255,255,0.95);
 }
-.poster .cell .d{
-  font-weight: 900;
-  font-size: 18px;
-  margin-bottom: 6px;
-}
-.poster .cell .t{
-  font-size: 12.8px;
-  line-height: 1.25;
-  margin: 2px 0;
-}
+.poster .cell .d{ font-weight: 900; font-size: 18px; margin-bottom: 6px; }
+.poster .cell .t{ font-size: 12.8px; line-height: 1.25; margin: 2px 0; }
 
-/* 공양게: 붓글씨 느낌(가능한 폰트 우선순위 + 웹폰트 로드) */
 @import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
 .poster .gongyang{
   margin-top: 14px;
@@ -304,14 +257,13 @@ div.stButton > button{
 )
 
 # -----------------------------
-# 상단 UI
+# 상단
 # -----------------------------
 st.title("맘스락 식단 변경 프로그램")
 
 top1, top2, top3, top4 = st.columns([1.1, 1.1, 1.0, 1.2], vertical_alignment="center")
 
 with top1:
-    # 월 선택(1개월만 표시)
     y, m = st.session_state.ym
     month_options = []
     for yy in range(date.today().year - 1, date.today().year + 3):
@@ -370,37 +322,44 @@ with top4:
 st.divider()
 
 # -----------------------------
-# 날짜 편집 다이얼로그
+# 날짜 편집 다이얼로그 (✅ nonlocal 제거: CSV 재로딩/저장 방식)
 # -----------------------------
 @st.dialog("식단 입력")
 def edit_day_dialog(d: date):
     dstr = _to_date_str(d)
 
-    cur_base = _get_value(base_df, dstr, "base_menu")
-    cur_change = _get_value(change_df, dstr, "change_menu")
-    cur_del = _get_delivery(delivery_df, dstr)
+    # 매번 최신 상태로 읽어오기(동시성/캐시 문제도 줄임)
+    _base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
+    _change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
+    _delivery_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
+    _menu_index_df = _read_csv(MENU_INDEX_PATH, ["name"])
 
-    # 인덱스 선택(선택하면 아래 텍스트에 반영)
+    cur_base = _get_value(_base_df, dstr, "base_menu")
+    cur_change = _get_value(_change_df, dstr, "change_menu")
+    cur_del = _get_delivery(_delivery_df, dstr)
+
+    # 인덱스(정렬)
+    _menu_index_df["name"] = _menu_index_df["name"].fillna("").astype(str).str.strip()
+    _menu_index_df = _menu_index_df[_menu_index_df["name"] != ""].drop_duplicates().sort_values("name")
+    menu_list = _menu_index_df["name"].tolist()
+
     st.subheader(d.strftime("%Y-%m-%d (%a)"))
 
-    # 기본/변경 메뉴: 인덱스 + 직접입력 혼합
     st.markdown("**기본 메뉴**")
     bcols = st.columns([1.0, 2.0])
     with bcols[0]:
-        b_pick = st.selectbox("인덱스 선택", options=["(선택 없음)"] + MENU_INDEX, index=0, key=f"b_pick_{dstr}")
+        b_pick = st.selectbox("인덱스 선택", options=["(선택 없음)"] + menu_list, index=0, key=f"b_pick_{dstr}")
     with bcols[1]:
         base_text = st.text_input("직접 입력", value=cur_base, key=f"b_txt_{dstr}")
-
     if b_pick != "(선택 없음)":
         base_text = b_pick
 
     st.markdown("**변경 메뉴**")
     ccols = st.columns([1.0, 2.0])
     with ccols[0]:
-        c_pick = st.selectbox("인덱스 선택", options=["(선택 없음)"] + MENU_INDEX, index=0, key=f"c_pick_{dstr}")
+        c_pick = st.selectbox("인덱스 선택", options=["(선택 없음)"] + menu_list, index=0, key=f"c_pick_{dstr}")
     with ccols[1]:
         change_text = st.text_input("직접 입력", value=cur_change, key=f"c_txt_{dstr}")
-
     if c_pick != "(선택 없음)":
         change_text = c_pick
 
@@ -416,17 +375,16 @@ def edit_day_dialog(d: date):
 
     st.divider()
     save_cols = st.columns([1, 1, 2])
+
     with save_cols[0]:
         if st.button("저장", use_container_width=True):
-            # 메뉴 인덱스 자동 축적(입력된 메뉴를 인덱스에 추가)
-            nonlocal base_df, change_df, delivery_df
-
             base_text2 = _normalize_menu_text(base_text)
             change_text2 = _normalize_menu_text(change_text)
 
-            base_df2 = base_df.copy()
-            change_df2 = change_df.copy()
-            delivery_df2 = delivery_df.copy()
+            # 저장: CSV 재로딩 -> 수정 -> 저장
+            base_df2 = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
+            change_df2 = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
+            delivery_df2 = _read_csv(DELIVERY_PATH, ["date", "delivery"])
 
             base_df2 = _save_row(base_df2, dstr, "base_menu", base_text2)
             change_df2 = _save_row(change_df2, dstr, "change_menu", change_text2)
@@ -437,11 +395,7 @@ def edit_day_dialog(d: date):
             delivery_df2.to_csv(DELIVERY_PATH, index=False, encoding="utf-8-sig")
 
             # 인덱스 누적 저장(가나다 정렬)
-            new_items = []
-            if base_text2:
-                new_items.append(base_text2)
-            if change_text2:
-                new_items.append(change_text2)
+            new_items = [x for x in [base_text2, change_text2] if x]
             if new_items:
                 idx_df = _read_csv(MENU_INDEX_PATH, ["name"])
                 for it in new_items:
@@ -451,6 +405,7 @@ def edit_day_dialog(d: date):
                 idx_df.to_csv(MENU_INDEX_PATH, index=False, encoding="utf-8-sig")
 
             st.rerun()
+
     with save_cols[1]:
         if st.button("닫기", use_container_width=True):
             st.rerun()
@@ -458,19 +413,17 @@ def edit_day_dialog(d: date):
 
 # -----------------------------
 # 달력 렌더 (월~금만)
-#  - 요청 1) 요일 아래 빈칸 제거: 헤더만 표시하고 불필요한 공간/라인 없음
 # -----------------------------
 y, m = st.session_state.ym
-cal = calendar.Calendar(firstweekday=0)  # Monday=0
+cal = calendar.Calendar(firstweekday=0)
 month_days = list(cal.itermonthdates(y, m))
 
-# 월~금만 보여주기 위한 주 단위 구성
 weeks = []
 week = []
 for d in month_days:
-    if d.weekday() < 5:  # Mon-Fri
+    if d.weekday() < 5:
         week.append(d)
-    if d.weekday() == 6:  # Sunday에서 주 종료
+    if d.weekday() == 6:
         if week:
             weeks.append(week)
         week = []
@@ -481,17 +434,16 @@ weekday_names = ["월", "화", "수", "목", "금"]
 
 st.subheader(_month_title(y, m))
 
-# 요일 헤더 (빈줄 없이)
+# 요일 헤더(불필요한 빈줄 없음)
 wcols = st.columns(5)
 for i, w in enumerate(weekday_names):
     with wcols[i]:
         st.markdown(f"**{w}**")
 
 def cell_status(d: date):
-    """변경/배달불요 여부로 배경 클래스 결정"""
     dstr = _to_date_str(d)
     if d.month != m:
-        return "out", "", "", ""
+        return "out", "", "", "", False
 
     b = _get_value(base_df, dstr, "base_menu").strip()
     c = _get_value(change_df, dstr, "change_menu").strip()
@@ -515,30 +467,20 @@ def cell_status(d: date):
 
 for w in weeks:
     cols = st.columns(5, gap="small")
-    # 주간의 월~금이 모두 들어오지 않는 경우(달 시작/끝), 빈칸 채우기
-    # w는 월~금만 들어있어서, 실제 위치 맞추려면 weekday 기준으로 배열해야 함
-    day_map = {d.weekday(): d for d in w if d.month == m or True}
+    day_map = {d.weekday(): d for d in w}
     for wd in range(5):
         with cols[wd]:
             d = day_map.get(wd, None)
-            if d is None:
-                st.markdown('<div class="cal-cell bg-base" style="opacity:0.25;"></div>', unsafe_allow_html=True)
-                continue
-
-            if d.month != m:
-                # 월 바깥(월~금만이라도 포함될 수 있음): 아주 흐리게
+            if d is None or d.month != m:
                 st.markdown('<div class="cal-cell bg-base" style="opacity:0.25;"></div>', unsafe_allow_html=True)
                 continue
 
             bg, badge, b, c, no_delivery = cell_status(d)
             dstr = _to_date_str(d)
 
-            # 버튼(클릭=다이얼로그)
             if st.button(f"{d.day}", key=f"daybtn_{dstr}", use_container_width=True):
                 edit_day_dialog(d)
 
-            # 아래 정보(시각화): 라벨 + 값
-            # - 설명문구(예: '날짜를 클릭하면...')는 어디에도 넣지 않음
             lines = []
             if b:
                 lines.append(("기본", b))
@@ -566,10 +508,9 @@ for w in weeks:
 st.divider()
 
 # -----------------------------
-# 업체 전달용 문자(복사용) - 설명문구 절대 없음
+# 업체 전달용 문자(복사용) - 설명문구 없음
 # -----------------------------
 def build_vendor_text(year: int, month: int) -> str:
-    # 월~금 범위에서 변경/배달불요만 뽑기 (업체 전달 목적)
     cal2 = calendar.Calendar(firstweekday=0)
     days = [d for d in cal2.itermonthdates(year, month) if d.month == month and d.weekday() < 5]
 
@@ -585,7 +526,6 @@ def build_vendor_text(year: int, month: int) -> str:
             nod.append(d)
 
     title = f"동약협회입니다.\n{year}년 {month:02d}월 도시락 변경/배달불요 내역입니다.\n"
-
     parts = [title]
 
     if nod:
@@ -608,7 +548,6 @@ with left:
     st.subheader("업체 전달용 문자(복사)")
     txt = build_vendor_text(y, m)
     st.text_area("", value=txt, height=220, label_visibility="collapsed")
-    st.caption("위 내용만 복사해 업체에 붙여넣기 하시면 됩니다.")
 
 with right:
     st.subheader("포스터(스크린샷용) 미리보기")
@@ -617,14 +556,11 @@ with right:
     kapma_b64 = _b64_image_if_exists(KAPMA_LOGO_PATH)
     bowl_b64 = _b64_image_if_exists(BOWL_IMG_PATH)
 
-    # 포스터 달력(월~금) 데이터 구성
     cal3 = calendar.Calendar(firstweekday=0)
     days = [d for d in cal3.itermonthdates(y, m) if d.month == m and d.weekday() < 5]
-    # 5열 그리드에 맞추기 위해 앞부분(월요일 시작) 빈칸 채우기
-    first_wd = date(y, m, 1).weekday()  # 0=월
+    first_wd = date(y, m, 1).weekday()
     pad_left = first_wd if first_wd < 5 else 0
     poster_cells = [None] * pad_left + days
-    # 5의 배수로 맞추기
     while len(poster_cells) % 5 != 0:
         poster_cells.append(None)
 
@@ -637,7 +573,6 @@ with right:
         del_ = _get_delivery(delivery_df, ds).strip().upper()
         no_delivery = (del_ == "N")
 
-        # 배경
         if c and no_delivery:
             bg = "background: linear-gradient(135deg, rgba(255,245,180,0.55), rgba(255,205,205,0.50));"
         elif c:
@@ -699,7 +634,7 @@ with right:
 st.divider()
 
 # -----------------------------
-# 업체 전달용 파일 출력 (A4 1페이지 최적화 HTML) - 안내문구 절대 없음
+# A4 1페이지 HTML 출력 (안내문구 없음)
 # -----------------------------
 def build_a4_html(year: int, month: int) -> str:
     moms_b64 = _b64_image_if_exists(MOMS_LOGO_PATH)
@@ -717,10 +652,9 @@ def build_a4_html(year: int, month: int) -> str:
         "바른 생각으로 이 공양을 받습니다"
     ).replace("\n", "<br/>")
 
-    # A4용 달력(월~금)
     calx = calendar.Calendar(firstweekday=0)
     days = [d for d in calx.itermonthdates(year, month) if d.month == month and d.weekday() < 5]
-    first_wd = date(year, month, 1).weekday()  # 월=0
+    first_wd = date(year, month, 1).weekday()
     pad_left = first_wd if first_wd < 5 else 0
     cells = [None] * pad_left + days
     while len(cells) % 5 != 0:
@@ -770,13 +704,8 @@ def build_a4_html(year: int, month: int) -> str:
 body {{ font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:0; }}
 @import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
 
-.wrap {{
-  width: 100%;
-}}
-.header {{
-  display:flex; align-items:center; justify-content:space-between;
-  gap: 8mm;
-}}
+.wrap {{ width: 100%; }}
+.header {{ display:flex; align-items:center; justify-content:space-between; gap: 8mm; }}
 .logo {{
   width: 38%;
   border: 1px solid rgba(0,0,0,0.10);
@@ -785,29 +714,18 @@ body {{ font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:
   display:flex; align-items:center; justify-content:center;
   min-height: 30mm;
 }}
-.mid {{
-  width: 24%;
-  display:flex; align-items:center; justify-content:center;
-}}
+.mid {{ width: 24%; display:flex; align-items:center; justify-content:center; }}
 .title {{
-  text-align:center;
-  font-weight: 900;
-  font-size: 20pt;
-  line-height: 1.08;
+  text-align:center; font-weight: 900;
+  font-size: 20pt; line-height: 1.08;
   margin: 6mm 0 2mm 0;
 }}
 .sub {{
-  text-align:center;
-  font-weight: 800;
-  font-size: 12pt;
-  opacity: .85;
+  text-align:center; font-weight: 800;
+  font-size: 12pt; opacity: .85;
   margin: 0 0 5mm 0;
 }}
-.grid {{
-  display:grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 4mm;
-}}
+.grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap: 4mm; }}
 .c {{
   border: 1px solid rgba(0,0,0,0.10);
   border-radius: 12px;
@@ -815,16 +733,8 @@ body {{ font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:
   min-height: 28mm;
   background: rgba(255,255,255,0.96);
 }}
-.c .d {{
-  font-weight: 900;
-  font-size: 12pt;
-  margin-bottom: 2mm;
-}}
-.c div {{
-  font-size: 9.2pt;
-  line-height: 1.22;
-  margin: 0.8mm 0;
-}}
+.c .d {{ font-weight: 900; font-size: 12pt; margin-bottom: 2mm; }}
+.c div {{ font-size: 9.2pt; line-height: 1.22; margin: 0.8mm 0; }}
 .c.chg {{ background: rgba(255,245,180,0.55); }}
 .c.nod {{ background: rgba(255,205,205,0.50); }}
 .c.both {{ background: linear-gradient(135deg, rgba(255,245,180,0.55), rgba(255,205,205,0.50)); }}
