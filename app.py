@@ -1,109 +1,519 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <title>맘스락 식단 관리</title>
-    <style>
-        :root {
-            --main-color: #6d4c41; /* 차분한 우드톤 */
-            --bg-color: #f9f7f2;
-            --accent-color: #e67e22;
-        }
-        body { font-family: 'Pretendard', sans-serif; background-color: var(--bg-color); margin: 0; padding: 20px; }
-        
-        /* 상단 헤더 섹션 */
-        .header-container {
-            display: flex;
-            background: white;
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            margin-bottom: 30px;
-            align-items: center;
-        }
-        .header-visual { flex: 1; display: flex; align-items: center; gap: 20px; }
-        .header-visual img { width: 120px; height: 120px; border-radius: 50%; object-fit: cover; border: 3px solid var(--main-color); }
-        
-        .gongyang-text {
-            flex: 2;
-            font-style: italic;
-            color: #555;
-            line-height: 1.8;
-            border-left: 4px solid var(--main-color);
-            padding-left: 20px;
-            font-size: 1.05rem;
-        }
+# app.py  (통째로 교체용)
+# 실행: python -m streamlit run app.py
 
-        /* 달력 섹션 (주말 제외) */
-        .calendar-title { font-size: 1.5rem; font-weight: bold; margin-bottom: 15px; color: var(--main-color); }
-        .calendar-grid {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr); /* 5열 구성 (월-금) */
-            gap: 10px;
-            background: #eee;
-            padding: 10px;
-            border-radius: 10px;
-        }
-        .day-header {
-            background: var(--main-color);
-            color: white;
-            padding: 10px;
-            text-align: center;
-            font-weight: bold;
-            border-radius: 5px;
-        }
-        .day-cell {
-            background: white;
-            min-height: 120px;
-            padding: 10px;
-            border-radius: 5px;
-            border: 1px solid #ddd;
-            transition: transform 0.2s;
-        }
-        .day-cell:hover { transform: translateY(-3px); box-shadow: 0 5px 10px rgba(0,0,0,0.1); }
-        .date-num { font-weight: bold; margin-bottom: 8px; display: block; }
-        .input-area { width: 100%; border: none; border-bottom: 1px dashed #ccc; outline: none; font-size: 0.9rem; }
-        
-        .today { border: 2px solid var(--accent-color); background-color: #fff9f0; }
-    </style>
-</head>
-<body>
+from __future__ import annotations
 
-    <div class="header-container">
-        <div class="header-visual">
-            <img src="https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=200&auto=format&fit=crop" alt="도시락">
-            <div>
-                <h2 style="margin:0; color:var(--main-color);">맘스락(MOM'S RAK)</h2>
-                <p style="margin:5px 0 0; font-size:0.9rem; color:#888;">정성을 담은 공양 식단</p>
-            </div>
-        </div>
-        <div class="gongyang-text">
-            이 음식이 어디에서 왔는가<br>
-            내 덕행으로는 받기가 부끄럽네<br>
-            마음의 온갖 탐욕을 떠나...
-        </div>
-    </div>
+from pathlib import Path
+from datetime import date, datetime
+import calendar
+import base64
+import io
+import re
+import unicodedata
 
-    <div class="calendar-title">2026년 02월 입력 달력 (평일 전용)</div>
-    <div class="calendar-grid">
-        <div class="day-header">월 (MON)</div>
-        <div class="day-header">화 (TUE)</div>
-        <div class="day-header">수 (WED)</div>
-        <div class="day-header">목 (THU)</div>
-        <div class="day-header">금 (FRI)</div>
+import pandas as pd
+import streamlit as st
 
-        <div class="day-cell"><span class="date-num">23</span><input class="input-area" placeholder="식단 입력..."></div>
-        <div class="day-cell"><span class="date-num">24</span><input class="input-area" placeholder="식단 입력..."></div>
-        <div class="day-cell"><span class="date-num">25</span><input class="input-area" placeholder="식단 입력..."></div>
-        <div class="day-cell"><span class="date-num">26</span><input class="input-area" placeholder="식단 입력..."></div>
-        <div class="day-cell"><span class="date-num">27</span><input class="input-area" placeholder="식단 입력..."></div>
-        
-        <div class="day-cell today"><span class="date-num">02 (월)</span><input class="input-area" placeholder="신규 주간 입력..."></div>
-        <div class="day-cell"><span class="date-num">03</span></div>
-        <div class="day-cell"><span class="date-num">04</span></div>
-        <div class="day-cell"><span class="date-num">05</span></div>
-        <div class="day-cell"><span class="date-num">06</span></div>
-    </div>
+# -----------------------------
+# 기본 설정
+# -----------------------------
+st.set_page_config(page_title="맘스락 식단 변경 프로그램", layout="wide")
 
-</body>
-</html>
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+ASSETS_DIR = APP_DIR / "assets"
+ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+
+BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
+CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
+DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
+MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
+
+MOMS_LOGO_PATH = ASSETS_DIR / "moms_logo.png"
+DOSIRAK_PATH_JPG = ASSETS_DIR / "dosirak.jpg"
+DOSIRAK_PATH_PNG = ASSETS_DIR / "dosirak.png"
+BOWL_PATH = ASSETS_DIR / "gongyang_bowl.png"
+
+GONGYANG_TEXT = (
+    "이 음식이 어디에서 왔는가\n"
+    "내 덕행으로는 받기가 부끄럽네\n"
+    "마음의 온갖 탐욕을 떠나\n"
+    "몸을 지탱하는 약으로 알아\n"
+    "이 공양을 받습니다"
+)
+
+WEEKDAYS_KO = ["월", "화", "수", "목", "금"]  # ✅ 토/일 제외
+
+
+# -----------------------------
+# 유틸
+# -----------------------------
+def _normalize_text(s: str) -> str:
+    s = (s or "").strip()
+    s = unicodedata.normalize("NFKC", s)
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def _read_csv(path: Path, cols: list[str]) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=cols)
+    try:
+        df = pd.read_csv(path, dtype=str)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    return df[cols].fillna("")
+
+
+def _write_csv(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+
+
+def _ensure_date_str(d: date) -> str:
+    return d.strftime("%Y-%m-%d")
+
+
+def _get_value(df: pd.DataFrame, d: date, col: str) -> str:
+    key = _ensure_date_str(d)
+    row = df[df["date"] == key]
+    if row.empty:
+        return ""
+    return str(row.iloc[0][col] or "").strip()
+
+
+def _set_value(df: pd.DataFrame, d: date, col: str, value: str) -> pd.DataFrame:
+    key = _ensure_date_str(d)
+    value = _normalize_text(value)
+    if (df["date"] == key).any():
+        df.loc[df["date"] == key, col] = value
+    else:
+        df = pd.concat([df, pd.DataFrame([{"date": key, col: value}])], ignore_index=True)
+    # date 정렬
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    df = df.sort_values("date").reset_index(drop=True)
+    return df
+
+
+def _set_delivery(df: pd.DataFrame, d: date, yn: str) -> pd.DataFrame:
+    key = _ensure_date_str(d)
+    yn = "Y" if yn == "Y" else "N"
+    if (df["date"] == key).any():
+        df.loc[df["date"] == key, "delivery"] = yn
+    else:
+        df = pd.concat([df, pd.DataFrame([{"date": key, "delivery": yn}])], ignore_index=True)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    df = df.sort_values("date").reset_index(drop=True)
+    return df
+
+
+def _img_to_base64(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    b = path.read_bytes()
+    return base64.b64encode(b).decode("utf-8")
+
+
+def _pick_dosirak_path() -> Path | None:
+    if DOSIRAK_PATH_JPG.exists():
+        return DOSIRAK_PATH_JPG
+    if DOSIRAK_PATH_PNG.exists():
+        return DOSIRAK_PATH_PNG
+    return None
+
+
+def _is_weekday(d: date) -> bool:
+    # 월=0 ... 일=6
+    return d.weekday() <= 4
+
+
+# -----------------------------
+# 데이터 로드
+# -----------------------------
+base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
+change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
+delivery_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
+menu_index_df = _read_csv(MENU_INDEX_PATH, ["name"])
+
+# menu index 가나다 정렬 유지
+menu_index_df["name"] = menu_index_df["name"].map(_normalize_text)
+menu_index_df = menu_index_df[menu_index_df["name"] != ""].drop_duplicates().sort_values("name").reset_index(drop=True)
+
+
+# -----------------------------
+# 스타일(CSS)
+# -----------------------------
+st.markdown(
+    """
+<style>
+/* 전체 폭 여백 살짝 */
+.block-container { padding-top: 1.0rem; padding-bottom: 1.5rem; }
+
+/* 상단 배너 */
+.hero {
+  border-radius: 18px;
+  padding: 18px 18px;
+  background: linear-gradient(135deg, rgba(255,241,220,0.75), rgba(255,255,255,0.85));
+  border: 1px solid rgba(0,0,0,0.06);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+  margin-bottom: 14px;
+}
+.hero-title {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.1;
+  margin: 0;
+}
+.hero-sub {
+  font-size: 14px;
+  opacity: 0.75;
+  margin-top: 6px;
+  margin-bottom: 0;
+}
+.gongyang-box{
+  border-radius: 14px;
+  padding: 12px 12px;
+  background: rgba(255,255,255,0.70);
+  border: 1px solid rgba(0,0,0,0.06);
+}
+.gongyang-title{
+  font-weight: 800;
+  font-size: 14px;
+  opacity: 0.80;
+  margin-bottom: 6px;
+}
+.gongyang-text{
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 700;
+  white-space: pre-line;
+}
+
+/* 달력 */
+.cal-header {
+  font-weight: 800;
+  font-size: 14px;
+  text-align: center;
+  padding: 6px 0 10px 0;
+  opacity: 0.85;
+}
+.cal-btn > button{
+  width: 100% !important;
+  text-align: left !important;
+  border-radius: 14px !important;
+  padding: 10px 10px !important;
+  min-height: 110px !important;
+  border: 1px solid rgba(0,0,0,0.10) !important;
+  background: rgba(255,255,255,0.85) !important;
+  white-space: pre-line !important;
+}
+
+/* 오늘 표시 */
+.today-outline{
+  outline: 3px solid rgba(255, 170, 0, 0.65);
+  outline-offset: -3px;
+  border-radius: 14px;
+}
+
+/* 상태 뱃지 */
+.badge{
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-right: 6px;
+}
+.badge-change{ background: rgba(255, 230, 120, 0.55); }
+.badge-nodelivery{ background: rgba(255, 120, 120, 0.45); }
+.badge-base{ background: rgba(220, 220, 220, 0.35); }
+
+.small-muted{ font-size: 12px; opacity: 0.70; }
+hr{ margin: 12px 0; }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# -----------------------------
+# 상단 메인 비주얼
+# -----------------------------
+logo_b64 = _img_to_base64(MOMS_LOGO_PATH)
+bowl_b64 = _img_to_base64(BOWL_PATH)
+dosirak_path = _pick_dosirak_path()
+dosirak_b64 = _img_to_base64(dosirak_path) if dosirak_path else None
+
+colA, colB = st.columns([1.35, 1.0], vertical_alignment="top")
+
+with colA:
+    st.markdown('<div class="hero">', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([0.55, 0.8, 1.15], vertical_alignment="center")
+
+    with c1:
+        if logo_b64:
+            st.image(MOMS_LOGO_PATH, use_container_width=True)
+        else:
+            st.markdown("**MOMS**", help="assets/moms_logo.png 를 넣으면 로고가 표시됩니다.")
+
+    with c2:
+        if dosirak_b64:
+            st.image(dosirak_path, use_container_width=True)
+        else:
+            st.markdown("🍱 **도시락 이미지(선택)**\n\n`assets/dosirak.jpg` 또는 `assets/dosirak.png`")
+
+    with c3:
+        if bowl_b64:
+            st.image(BOWL_PATH, use_container_width=True)
+        else:
+            st.markdown("🥣 **공양 그릇 이미지(선택)**\n\n`assets/gongyang_bowl.png`")
+
+    st.markdown(
+        """
+<p class="hero-title">맘스락 식단(배달) 변경</p>
+<p class="hero-sub">월~금 입력에 최적화된 화면입니다. (토/일은 표시하지 않습니다)</p>
+""",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with colB:
+    st.markdown(
+        f"""
+<div class="gongyang-box">
+  <div class="gongyang-title">공양게(供養偈)</div>
+  <div class="gongyang-text">{GONGYANG_TEXT}</div>
+  <div class="small-muted" style="text-align:right;margin-top:8px;">— 마음을 가다듬고 한 끼를 받습니다</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+st.markdown("<hr/>", unsafe_allow_html=True)
+
+
+# -----------------------------
+# 상단 컨트롤(월 선택)
+# -----------------------------
+today = date.today()
+years = list(range(today.year - 1, today.year + 3))
+left, right = st.columns([1.1, 1.4], vertical_alignment="center")
+
+with left:
+    sel_year = st.selectbox("년도", years, index=years.index(today.year))
+    sel_month = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
+
+with right:
+    st.caption("✅ 달력은 **1달분만** 표시됩니다.  ✅ 토/일은 제외(월~금만)")
+
+# 선택 달의 첫날
+selected_first = date(sel_year, sel_month, 1)
+
+
+# -----------------------------
+# 클릭(입력) 폼: 대화상자
+# -----------------------------
+def open_editor(d: date):
+    # 주말은 편집 안 함
+    if not _is_weekday(d):
+        st.toast("토/일은 입력 대상에서 제외됩니다.")
+        return
+
+    base_now = _get_value(base_df, d, "base_menu")
+    change_now = _get_value(change_df, d, "change_menu")
+    delivery_now = _get_value(delivery_df, d, "delivery")
+    delivery_now = delivery_now if delivery_now in ("Y", "N") else "N"
+
+    @st.dialog(f"{d.strftime('%Y-%m-%d')} ({WEEKDAYS_KO[d.weekday()]}) 입력")
+    def _dlg():
+        nonlocal base_df, change_df, delivery_df, menu_index_df
+
+        st.markdown("아래에서 **기본/변경/배달불요**를 입력 후 저장하세요.")
+        st.divider()
+
+        idx_list = menu_index_df["name"].tolist()
+        c1, c2 = st.columns([1.0, 1.0])
+
+        with c1:
+            st.markdown("**기본메뉴**")
+            pick_base = st.selectbox("인덱스에서 선택(선택)", ["(직접입력)"] + idx_list, index=0, key=f"pb_{d}")
+            base_text = st.text_input("기본메뉴(직접 입력)", value=base_now, key=f"bt_{d}")
+            if pick_base != "(직접입력)":
+                base_text = pick_base
+
+        with c2:
+            st.markdown("**변경메뉴**")
+            pick_change = st.selectbox("인덱스에서 선택(선택)", ["(직접입력)"] + idx_list, index=0, key=f"pc_{d}")
+            change_text = st.text_input("변경메뉴(직접 입력)", value=change_now, key=f"ct_{d}")
+            if pick_change != "(직접입력)":
+                change_text = pick_change
+
+        st.divider()
+
+        delivery_flag = st.toggle("🚫 배달불요(체크하면 배달불요)", value=(delivery_now == "Y"), key=f"dv_{d}")
+
+        st.divider()
+
+        cc1, cc2, cc3 = st.columns([1, 1, 1], vertical_alignment="center")
+        with cc1:
+            if st.button("💾 저장", use_container_width=True):
+                base_df = _set_value(base_df, d, "base_menu", base_text)
+                change_df = _set_value(change_df, d, "change_menu", change_text)
+                delivery_df = _set_delivery(delivery_df, d, "Y" if delivery_flag else "N")
+
+                _write_csv(base_df, BASE_MENU_PATH)
+                _write_csv(change_df, CHANGE_MENU_PATH)
+                _write_csv(delivery_df, DELIVERY_PATH)
+
+                # 인덱스 자동 축적(가나다 정렬)
+                new_items = []
+                for v in [base_text, change_text]:
+                    v = _normalize_text(v)
+                    if v:
+                        new_items.append(v)
+
+                if new_items:
+                    idx = pd.concat([menu_index_df, pd.DataFrame({"name": new_items})], ignore_index=True)
+                    idx["name"] = idx["name"].map(_normalize_text)
+                    idx = idx[idx["name"] != ""].drop_duplicates().sort_values("name").reset_index(drop=True)
+                    menu_index_df = idx
+                    _write_csv(menu_index_df, MENU_INDEX_PATH)
+
+                st.success("저장했습니다.")
+                st.rerun()
+
+        with cc2:
+            if st.button("🧹 해당일 비우기", use_container_width=True):
+                key = _ensure_date_str(d)
+                base_df = base_df[base_df["date"] != key].reset_index(drop=True)
+                change_df = change_df[change_df["date"] != key].reset_index(drop=True)
+                delivery_df = delivery_df[delivery_df["date"] != key].reset_index(drop=True)
+
+                _write_csv(base_df, BASE_MENU_PATH)
+                _write_csv(change_df, CHANGE_MENU_PATH)
+                _write_csv(delivery_df, DELIVERY_PATH)
+                st.success("삭제했습니다.")
+                st.rerun()
+
+        with cc3:
+            st.markdown('<div class="small-muted">저장 후 창이 닫히고 달력이 갱신됩니다.</div>', unsafe_allow_html=True)
+
+    _dlg()
+
+
+# -----------------------------
+# 달력(월~금만) 표시 + 요일 헤더
+# -----------------------------
+st.subheader(f"{sel_year}년 {sel_month:02d}월 (월~금)")
+
+# 요일 헤더
+hcols = st.columns(5)
+for i, wd in enumerate(WEEKDAYS_KO):
+    hcols[i].markdown(f'<div class="cal-header">{wd}</div>', unsafe_allow_html=True)
+
+cal = calendar.Calendar(firstweekday=0)  # Monday
+weeks = cal.monthdatescalendar(sel_year, sel_month)
+
+for week in weeks:
+    # week: 월~일 7개
+    # ✅ 월~금만 사용
+    day_list = week[:5]
+
+    cols = st.columns(5)
+    for i, d in enumerate(day_list):
+        with cols[i]:
+            if d.month != sel_month:
+                # 다른 달의 날짜는 빈칸 처리
+                st.button(" ", disabled=True, key=f"blank_{sel_year}_{sel_month}_{week[0]}_{i}")
+                continue
+
+            # 내용 요약(칸 안에)
+            base_v = _get_value(base_df, d, "base_menu")
+            change_v = _get_value(change_df, d, "change_menu")
+            deliv_v = _get_value(delivery_df, d, "delivery")
+            deliv_v = deliv_v if deliv_v in ("Y", "N") else "N"
+
+            badges = []
+            lines = []
+
+            # 배달불요 / 변경 / 기본 순으로 눈에 띄게
+            if deliv_v == "Y":
+                badges.append("🚫배달불요")
+            if change_v:
+                badges.append("🔁변경")
+            if base_v:
+                badges.append("🍚기본")
+
+            if change_v:
+                lines.append(f"변경: {change_v}")
+            if deliv_v == "Y":
+                lines.append("배달: 불요")
+            if base_v:
+                lines.append(f"기본: {base_v}")
+
+            top = f"{d.day:02d}"
+            if badges:
+                top += "  " + " · ".join(badges)
+
+            text = top
+            if lines:
+                text += "\n" + "\n".join(lines[:3])  # 너무 길면 3줄까지만
+
+            # 오늘 강조(월~금 화면에서만)
+            wrap_class = "today-outline" if d == today else ""
+            st.markdown(f'<div class="{wrap_class}">', unsafe_allow_html=True)
+
+            clicked = st.button(
+                text,
+                key=f"day_{d}",
+                help="클릭하면 입력창이 뜹니다.",
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # 버튼 스타일 적용(클래스)
+            st.markdown(
+                """
+<script>
+const btn = window.parent.document.querySelectorAll('button[kind="secondaryFormSubmit"]');
+</script>
+""",
+                unsafe_allow_html=True,
+            )
+            # Streamlit 기본 버튼에 class를 직접 못 붙여서, 컨테이너 CSS로 통일감만 유지
+
+            if clicked:
+                open_editor(d)
+
+st.divider()
+
+# -----------------------------
+# 인덱스 관리(가나다 자동정렬)
+# -----------------------------
+st.markdown("### 메뉴 인덱스(가나다 순)")
+cL, cR = st.columns([1.2, 1.0], vertical_alignment="top")
+with cL:
+    new_item = st.text_input("인덱스에 메뉴 추가", placeholder="예) 소고기미역국, 제육볶음 ...")
+    if st.button("➕ 인덱스에 추가"):
+        v = _normalize_text(new_item)
+        if v:
+            menu_index_df = pd.concat([menu_index_df, pd.DataFrame([{"name": v}])], ignore_index=True)
+            menu_index_df["name"] = menu_index_df["name"].map(_normalize_text)
+            menu_index_df = (
+                menu_index_df[menu_index_df["name"] != ""]
+                .drop_duplicates()
+                .sort_values("name")
+                .reset_index(drop=True)
+            )
+            _write_csv(menu_index_df, MENU_INDEX_PATH)
+            st.success("추가했습니다.")
+            st.rerun()
+        else:
+            st.warning("메뉴명을 입력해 주세요.")
+
+with cR:
+    st.dataframe(menu_index_df, use_container_width=True, height=260)
