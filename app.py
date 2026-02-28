@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date
 import calendar
 import base64
-import io
 import re
 import unicodedata
 
@@ -45,7 +44,6 @@ GONGYANG_TEXT = (
 )
 
 WEEKDAYS_KO = ["월", "화", "수", "목", "금"]  # ✅ 토/일 제외
-
 
 # -----------------------------
 # 유틸
@@ -94,7 +92,7 @@ def _set_value(df: pd.DataFrame, d: date, col: str, value: str) -> pd.DataFrame:
         df.loc[df["date"] == key, col] = value
     else:
         df = pd.concat([df, pd.DataFrame([{"date": key, col: value}])], ignore_index=True)
-    # date 정렬
+
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
     df = df.sort_values("date").reset_index(drop=True)
     return df
@@ -107,6 +105,7 @@ def _set_delivery(df: pd.DataFrame, d: date, yn: str) -> pd.DataFrame:
         df.loc[df["date"] == key, "delivery"] = yn
     else:
         df = pd.concat([df, pd.DataFrame([{"date": key, "delivery": yn}])], ignore_index=True)
+
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
     df = df.sort_values("date").reset_index(drop=True)
     return df
@@ -128,22 +127,32 @@ def _pick_dosirak_path() -> Path | None:
 
 
 def _is_weekday(d: date) -> bool:
-    # 월=0 ... 일=6
-    return d.weekday() <= 4
+    return d.weekday() <= 4  # 월(0)~금(4)
 
 
 # -----------------------------
-# 데이터 로드
+# 세션 상태 초기화(핵심)
 # -----------------------------
-base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
-change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
-delivery_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
-menu_index_df = _read_csv(MENU_INDEX_PATH, ["name"])
+def _init_state():
+    if "base_df" not in st.session_state:
+        st.session_state.base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
+    if "change_df" not in st.session_state:
+        st.session_state.change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
+    if "delivery_df" not in st.session_state:
+        st.session_state.delivery_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
+    if "menu_index_df" not in st.session_state:
+        df = _read_csv(MENU_INDEX_PATH, ["name"])
+        df["name"] = df["name"].map(_normalize_text)
+        df = df[df["name"] != ""].drop_duplicates().sort_values("name").reset_index(drop=True)
+        st.session_state.menu_index_df = df
 
-# menu index 가나다 정렬 유지
-menu_index_df["name"] = menu_index_df["name"].map(_normalize_text)
-menu_index_df = menu_index_df[menu_index_df["name"] != ""].drop_duplicates().sort_values("name").reset_index(drop=True)
+_init_state()
 
+# 편의 참조
+base_df: pd.DataFrame = st.session_state.base_df
+change_df: pd.DataFrame = st.session_state.change_df
+delivery_df: pd.DataFrame = st.session_state.delivery_df
+menu_index_df: pd.DataFrame = st.session_state.menu_index_df
 
 # -----------------------------
 # 스타일(CSS)
@@ -151,10 +160,8 @@ menu_index_df = menu_index_df[menu_index_df["name"] != ""].drop_duplicates().sor
 st.markdown(
     """
 <style>
-/* 전체 폭 여백 살짝 */
 .block-container { padding-top: 1.0rem; padding-bottom: 1.5rem; }
 
-/* 상단 배너 */
 .hero {
   border-radius: 18px;
   padding: 18px 18px;
@@ -163,41 +170,19 @@ st.markdown(
   box-shadow: 0 6px 18px rgba(0,0,0,0.06);
   margin-bottom: 14px;
 }
-.hero-title {
-  font-size: 30px;
-  font-weight: 800;
-  line-height: 1.1;
-  margin: 0;
-}
-.hero-sub {
-  font-size: 14px;
-  opacity: 0.75;
-  margin-top: 6px;
-  margin-bottom: 0;
-}
+.hero-title { font-size: 30px; font-weight: 800; line-height: 1.1; margin: 0; }
+.hero-sub { font-size: 14px; opacity: 0.75; margin-top: 6px; margin-bottom: 0; }
+
 .gongyang-box{
-  border-radius: 14px;
-  padding: 12px 12px;
+  border-radius: 14px; padding: 12px 12px;
   background: rgba(255,255,255,0.70);
   border: 1px solid rgba(0,0,0,0.06);
 }
-.gongyang-title{
-  font-weight: 800;
-  font-size: 14px;
-  opacity: 0.80;
-  margin-bottom: 6px;
-}
-.gongyang-text{
-  font-size: 18px;
-  line-height: 1.35;
-  font-weight: 700;
-  white-space: pre-line;
-}
+.gongyang-title{ font-weight: 800; font-size: 14px; opacity: 0.80; margin-bottom: 6px; }
+.gongyang-text{ font-size: 18px; line-height: 1.35; font-weight: 700; white-space: pre-line; }
 
-/* 달력 */
 .cal-header {
-  font-weight: 800;
-  font-size: 14px;
+  font-weight: 800; font-size: 14px;
   text-align: center;
   padding: 6px 0 10px 0;
   opacity: 0.85;
@@ -212,27 +197,11 @@ st.markdown(
   background: rgba(255,255,255,0.85) !important;
   white-space: pre-line !important;
 }
-
-/* 오늘 표시 */
 .today-outline{
   outline: 3px solid rgba(255, 170, 0, 0.65);
   outline-offset: -3px;
   border-radius: 14px;
 }
-
-/* 상태 뱃지 */
-.badge{
-  display: inline-block;
-  font-size: 12px;
-  font-weight: 800;
-  padding: 2px 8px;
-  border-radius: 999px;
-  margin-right: 6px;
-}
-.badge-change{ background: rgba(255, 230, 120, 0.55); }
-.badge-nodelivery{ background: rgba(255, 120, 120, 0.45); }
-.badge-base{ background: rgba(220, 220, 220, 0.35); }
-
 .small-muted{ font-size: 12px; opacity: 0.70; }
 hr{ margin: 12px 0; }
 </style>
@@ -240,14 +209,12 @@ hr{ margin: 12px 0; }
     unsafe_allow_html=True,
 )
 
-
 # -----------------------------
 # 상단 메인 비주얼
 # -----------------------------
 logo_b64 = _img_to_base64(MOMS_LOGO_PATH)
 bowl_b64 = _img_to_base64(BOWL_PATH)
 dosirak_path = _pick_dosirak_path()
-dosirak_b64 = _img_to_base64(dosirak_path) if dosirak_path else None
 
 colA, colB = st.columns([1.35, 1.0], vertical_alignment="top")
 
@@ -259,24 +226,24 @@ with colA:
         if logo_b64:
             st.image(MOMS_LOGO_PATH, use_container_width=True)
         else:
-            st.markdown("**MOMS**", help="assets/moms_logo.png 를 넣으면 로고가 표시됩니다.")
+            st.markdown("**MOMS**\n\n(assets/moms_logo.png 추가 시 로고 표시)")
 
     with c2:
-        if dosirak_b64:
+        if dosirak_path and dosirak_path.exists():
             st.image(dosirak_path, use_container_width=True)
         else:
-            st.markdown("🍱 **도시락 이미지(선택)**\n\n`assets/dosirak.jpg` 또는 `assets/dosirak.png`")
+            st.markdown("🍱 **도시락 이미지(선택)**\n\nassets/dosirak.jpg 또는 dosirak.png")
 
     with c3:
         if bowl_b64:
             st.image(BOWL_PATH, use_container_width=True)
         else:
-            st.markdown("🥣 **공양 그릇 이미지(선택)**\n\n`assets/gongyang_bowl.png`")
+            st.markdown("🥣 **공양 그릇 이미지(선택)**\n\nassets/gongyang_bowl.png")
 
     st.markdown(
         """
 <p class="hero-title">맘스락 식단(배달) 변경</p>
-<p class="hero-sub">월~금 입력에 최적화된 화면입니다. (토/일은 표시하지 않습니다)</p>
+<p class="hero-sub">월~금 입력에 최적화 (토/일은 표시하지 않습니다)</p>
 """,
         unsafe_allow_html=True,
     )
@@ -296,9 +263,8 @@ with colB:
 
 st.markdown("<hr/>", unsafe_allow_html=True)
 
-
 # -----------------------------
-# 상단 컨트롤(월 선택)
+# 상단 컨트롤(월 선택) - 1달만 표시
 # -----------------------------
 today = date.today()
 years = list(range(today.year - 1, today.year + 3))
@@ -311,32 +277,26 @@ with left:
 with right:
     st.caption("✅ 달력은 **1달분만** 표시됩니다.  ✅ 토/일은 제외(월~금만)")
 
-# 선택 달의 첫날
-selected_first = date(sel_year, sel_month, 1)
-
-
 # -----------------------------
-# 클릭(입력) 폼: 대화상자
+# 날짜 클릭 → 입력(대화상자)
 # -----------------------------
 def open_editor(d: date):
-    # 주말은 편집 안 함
     if not _is_weekday(d):
         st.toast("토/일은 입력 대상에서 제외됩니다.")
         return
 
-    base_now = _get_value(base_df, d, "base_menu")
-    change_now = _get_value(change_df, d, "change_menu")
-    delivery_now = _get_value(delivery_df, d, "delivery")
+    base_now = _get_value(st.session_state.base_df, d, "base_menu")
+    change_now = _get_value(st.session_state.change_df, d, "change_menu")
+    delivery_now = _get_value(st.session_state.delivery_df, d, "delivery")
     delivery_now = delivery_now if delivery_now in ("Y", "N") else "N"
 
     @st.dialog(f"{d.strftime('%Y-%m-%d')} ({WEEKDAYS_KO[d.weekday()]}) 입력")
     def _dlg():
-        nonlocal base_df, change_df, delivery_df, menu_index_df
+        idx_list = st.session_state.menu_index_df["name"].tolist()
 
         st.markdown("아래에서 **기본/변경/배달불요**를 입력 후 저장하세요.")
         st.divider()
 
-        idx_list = menu_index_df["name"].tolist()
         c1, c2 = st.columns([1.0, 1.0])
 
         with c1:
@@ -354,23 +314,24 @@ def open_editor(d: date):
                 change_text = pick_change
 
         st.divider()
-
         delivery_flag = st.toggle("🚫 배달불요(체크하면 배달불요)", value=(delivery_now == "Y"), key=f"dv_{d}")
-
         st.divider()
 
-        cc1, cc2, cc3 = st.columns([1, 1, 1], vertical_alignment="center")
+        cc1, cc2 = st.columns([1, 1], vertical_alignment="center")
+
         with cc1:
             if st.button("💾 저장", use_container_width=True):
-                base_df = _set_value(base_df, d, "base_menu", base_text)
-                change_df = _set_value(change_df, d, "change_menu", change_text)
-                delivery_df = _set_delivery(delivery_df, d, "Y" if delivery_flag else "N")
+                # 1) 세션 DF 갱신
+                st.session_state.base_df = _set_value(st.session_state.base_df, d, "base_menu", base_text)
+                st.session_state.change_df = _set_value(st.session_state.change_df, d, "change_menu", change_text)
+                st.session_state.delivery_df = _set_delivery(st.session_state.delivery_df, d, "Y" if delivery_flag else "N")
 
-                _write_csv(base_df, BASE_MENU_PATH)
-                _write_csv(change_df, CHANGE_MENU_PATH)
-                _write_csv(delivery_df, DELIVERY_PATH)
+                # 2) 파일 저장
+                _write_csv(st.session_state.base_df, BASE_MENU_PATH)
+                _write_csv(st.session_state.change_df, CHANGE_MENU_PATH)
+                _write_csv(st.session_state.delivery_df, DELIVERY_PATH)
 
-                # 인덱스 자동 축적(가나다 정렬)
+                # 3) 인덱스 자동 축적 + 가나다 정렬
                 new_items = []
                 for v in [base_text, change_text]:
                     v = _normalize_text(v)
@@ -378,11 +339,11 @@ def open_editor(d: date):
                         new_items.append(v)
 
                 if new_items:
-                    idx = pd.concat([menu_index_df, pd.DataFrame({"name": new_items})], ignore_index=True)
+                    idx = pd.concat([st.session_state.menu_index_df, pd.DataFrame({"name": new_items})], ignore_index=True)
                     idx["name"] = idx["name"].map(_normalize_text)
                     idx = idx[idx["name"] != ""].drop_duplicates().sort_values("name").reset_index(drop=True)
-                    menu_index_df = idx
-                    _write_csv(menu_index_df, MENU_INDEX_PATH)
+                    st.session_state.menu_index_df = idx
+                    _write_csv(st.session_state.menu_index_df, MENU_INDEX_PATH)
 
                 st.success("저장했습니다.")
                 st.rerun()
@@ -390,28 +351,24 @@ def open_editor(d: date):
         with cc2:
             if st.button("🧹 해당일 비우기", use_container_width=True):
                 key = _ensure_date_str(d)
-                base_df = base_df[base_df["date"] != key].reset_index(drop=True)
-                change_df = change_df[change_df["date"] != key].reset_index(drop=True)
-                delivery_df = delivery_df[delivery_df["date"] != key].reset_index(drop=True)
+                st.session_state.base_df = st.session_state.base_df[st.session_state.base_df["date"] != key].reset_index(drop=True)
+                st.session_state.change_df = st.session_state.change_df[st.session_state.change_df["date"] != key].reset_index(drop=True)
+                st.session_state.delivery_df = st.session_state.delivery_df[st.session_state.delivery_df["date"] != key].reset_index(drop=True)
 
-                _write_csv(base_df, BASE_MENU_PATH)
-                _write_csv(change_df, CHANGE_MENU_PATH)
-                _write_csv(delivery_df, DELIVERY_PATH)
+                _write_csv(st.session_state.base_df, BASE_MENU_PATH)
+                _write_csv(st.session_state.change_df, CHANGE_MENU_PATH)
+                _write_csv(st.session_state.delivery_df, DELIVERY_PATH)
+
                 st.success("삭제했습니다.")
                 st.rerun()
 
-        with cc3:
-            st.markdown('<div class="small-muted">저장 후 창이 닫히고 달력이 갱신됩니다.</div>', unsafe_allow_html=True)
-
     _dlg()
 
-
 # -----------------------------
-# 달력(월~금만) 표시 + 요일 헤더
+# 달력(월~금만) + 요일 표시
 # -----------------------------
 st.subheader(f"{sel_year}년 {sel_month:02d}월 (월~금)")
 
-# 요일 헤더
 hcols = st.columns(5)
 for i, wd in enumerate(WEEKDAYS_KO):
     hcols[i].markdown(f'<div class="cal-header">{wd}</div>', unsafe_allow_html=True)
@@ -420,40 +377,31 @@ cal = calendar.Calendar(firstweekday=0)  # Monday
 weeks = cal.monthdatescalendar(sel_year, sel_month)
 
 for week in weeks:
-    # week: 월~일 7개
-    # ✅ 월~금만 사용
-    day_list = week[:5]
-
+    day_list = week[:5]  # ✅ 월~금
     cols = st.columns(5)
+
     for i, d in enumerate(day_list):
         with cols[i]:
             if d.month != sel_month:
-                # 다른 달의 날짜는 빈칸 처리
                 st.button(" ", disabled=True, key=f"blank_{sel_year}_{sel_month}_{week[0]}_{i}")
                 continue
 
-            # 내용 요약(칸 안에)
-            base_v = _get_value(base_df, d, "base_menu")
-            change_v = _get_value(change_df, d, "change_menu")
-            deliv_v = _get_value(delivery_df, d, "delivery")
+            base_v = _get_value(st.session_state.base_df, d, "base_menu")
+            change_v = _get_value(st.session_state.change_df, d, "change_menu")
+            deliv_v = _get_value(st.session_state.delivery_df, d, "delivery")
             deliv_v = deliv_v if deliv_v in ("Y", "N") else "N"
 
             badges = []
             lines = []
 
-            # 배달불요 / 변경 / 기본 순으로 눈에 띄게
             if deliv_v == "Y":
                 badges.append("🚫배달불요")
+                lines.append("배달: 불요")
             if change_v:
                 badges.append("🔁변경")
+                lines.append(f"변경: {change_v}")
             if base_v:
                 badges.append("🍚기본")
-
-            if change_v:
-                lines.append(f"변경: {change_v}")
-            if deliv_v == "Y":
-                lines.append("배달: 불요")
-            if base_v:
                 lines.append(f"기본: {base_v}")
 
             top = f"{d.day:02d}"
@@ -462,29 +410,12 @@ for week in weeks:
 
             text = top
             if lines:
-                text += "\n" + "\n".join(lines[:3])  # 너무 길면 3줄까지만
+                text += "\n" + "\n".join(lines[:3])
 
-            # 오늘 강조(월~금 화면에서만)
             wrap_class = "today-outline" if d == today else ""
             st.markdown(f'<div class="{wrap_class}">', unsafe_allow_html=True)
-
-            clicked = st.button(
-                text,
-                key=f"day_{d}",
-                help="클릭하면 입력창이 뜹니다.",
-            )
+            clicked = st.button(text, key=f"day_{d}", help="클릭하면 입력창이 뜹니다.")
             st.markdown("</div>", unsafe_allow_html=True)
-
-            # 버튼 스타일 적용(클래스)
-            st.markdown(
-                """
-<script>
-const btn = window.parent.document.querySelectorAll('button[kind="secondaryFormSubmit"]');
-</script>
-""",
-                unsafe_allow_html=True,
-            )
-            # Streamlit 기본 버튼에 class를 직접 못 붙여서, 컨테이너 CSS로 통일감만 유지
 
             if clicked:
                 open_editor(d)
@@ -496,24 +427,21 @@ st.divider()
 # -----------------------------
 st.markdown("### 메뉴 인덱스(가나다 순)")
 cL, cR = st.columns([1.2, 1.0], vertical_alignment="top")
+
 with cL:
     new_item = st.text_input("인덱스에 메뉴 추가", placeholder="예) 소고기미역국, 제육볶음 ...")
     if st.button("➕ 인덱스에 추가"):
         v = _normalize_text(new_item)
         if v:
-            menu_index_df = pd.concat([menu_index_df, pd.DataFrame([{"name": v}])], ignore_index=True)
-            menu_index_df["name"] = menu_index_df["name"].map(_normalize_text)
-            menu_index_df = (
-                menu_index_df[menu_index_df["name"] != ""]
-                .drop_duplicates()
-                .sort_values("name")
-                .reset_index(drop=True)
-            )
-            _write_csv(menu_index_df, MENU_INDEX_PATH)
+            idx = pd.concat([st.session_state.menu_index_df, pd.DataFrame([{"name": v}])], ignore_index=True)
+            idx["name"] = idx["name"].map(_normalize_text)
+            idx = idx[idx["name"] != ""].drop_duplicates().sort_values("name").reset_index(drop=True)
+            st.session_state.menu_index_df = idx
+            _write_csv(st.session_state.menu_index_df, MENU_INDEX_PATH)
             st.success("추가했습니다.")
             st.rerun()
         else:
             st.warning("메뉴명을 입력해 주세요.")
 
 with cR:
-    st.dataframe(menu_index_df, use_container_width=True, height=260)
+    st.dataframe(st.session_state.menu_index_df, use_container_width=True, height=260)
