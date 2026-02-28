@@ -122,6 +122,12 @@ def _load_state():
         st.session_state.ym = (today.year, today.month)
     if "people_count" not in st.session_state:
         st.session_state.people_count = "1"
+    if "vendor_name" not in st.session_state:
+        st.session_state.vendor_name = "맘스락(MOMS)"
+    if "vendor_phone" not in st.session_state:
+        st.session_state.vendor_phone = "010-0000-0000"
+    if "kapma_phone" not in st.session_state:
+        st.session_state.kapma_phone = "02-0000-0000"  # ✅ 여기만 부회장님 번호로 바꾸면 됨
 
 
 # -----------------------------
@@ -141,45 +147,12 @@ menu_index_df.to_csv(MENU_INDEX_PATH, index=False, encoding="utf-8-sig")
 MENU_INDEX = menu_index_df["name"].tolist()
 
 # -----------------------------
-# CSS (시각화 강화)
+# CSS (포스터/출력물 공통)
 # -----------------------------
 st.markdown(
     """
 <style>
-.block-container { padding-top: 1.0rem; padding-bottom: 2.2rem; }
-
-.cal-cell{
-  border: 1px solid rgba(0,0,0,0.12);
-  border-radius: 14px;
-  padding: 10px;
-  min-height: 138px;
-  background: rgba(255,255,255,0.90);
-}
-.badge{
-  display:inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 800;
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.65);
-}
-.bg-base { background: rgba(255,255,255,0.92); }
-.bg-change { background: rgba(255, 245, 180, 0.55); }
-.bg-nodelivery { background: rgba(255, 205, 205, 0.50); }
-.bg-both { background: linear-gradient(135deg, rgba(255,245,180,0.55), rgba(255,205,205,0.50)); }
-
-.itemline{
-  font-size: 13px;
-  line-height: 1.25;
-  margin: 2px 0;
-  opacity: 0.95;
-}
-.itemlabel{
-  font-weight: 900;
-  margin-right: 6px;
-  opacity: 0.85;
-}
+.block-container { padding-top: 1.0rem; padding-bottom: 2.0rem; }
 
 div.stButton > button{
   width: 100%;
@@ -188,17 +161,25 @@ div.stButton > button{
   font-weight: 800 !important;
 }
 
+/* 달력 상태 색 */
+.bg-base { background: rgba(255,255,255,0.96); }
+.bg-change { background: rgba(255, 245, 180, 0.60); }
+.bg-nodelivery { background: rgba(255, 205, 205, 0.55); }
+.bg-both { background: linear-gradient(135deg, rgba(255,245,180,0.60), rgba(255,205,205,0.55)); }
+
+/* 포스터(스크린샷) */
 .poster-wrap{ width:100%; display:flex; justify-content:center; }
 .poster{
-  width:100%; max-width:900px;
+  width:100%;
+  max-width: 980px;
   background:#fff;
   border-radius:18px;
   border: 1px solid rgba(0,0,0,0.10);
-  padding:18px 18px 14px 18px;
+  padding:16px 16px 12px 16px;
 }
-.poster .toprow{ display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.poster .toprow{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .poster .logoBox{
-  width: 33%;
+  width: 34%;
   border: 1px solid rgba(0,0,0,0.10);
   border-radius: 16px;
   padding: 10px;
@@ -206,16 +187,15 @@ div.stButton > button{
   min-height: 92px;
 }
 .poster .midBox{
-  width: 34%;
-  display:flex; flex-direction:column;
-  align-items:center; justify-content:center;
-  gap: 10px;
+  width: 32%;
+  display:flex; align-items:center; justify-content:center;
+  min-height: 92px;
 }
 .poster .title{
   text-align:center;
   font-weight: 900;
   font-size: 34px;
-  line-height: 1.08;
+  line-height: 1.10;
   margin-top: 12px;
   margin-bottom: 6px;
 }
@@ -224,26 +204,43 @@ div.stButton > button{
   font-weight: 800;
   font-size: 18px;
   opacity: 0.85;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
-.poster .calendar-grid{
+
+/* 달력형태(요일행 + 그리드) */
+.poster .dow{
   display:grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.poster .dow .h{
+  text-align:center;
+  font-weight: 900;
+  padding: 6px 0;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+.poster .grid{
+  display:grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
 }
 .poster .cell{
   border: 1px solid rgba(0,0,0,0.10);
   border-radius: 14px;
   padding: 10px;
-  min-height: 120px;
-  background: rgba(255,255,255,0.95);
+  min-height: 122px;
 }
 .poster .cell .d{ font-weight: 900; font-size: 18px; margin-bottom: 6px; }
 .poster .cell .t{ font-size: 12.8px; line-height: 1.25; margin: 2px 0; }
+.poster .cell .t b{ opacity: 0.90; }
 
 @import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
 .poster .gongyang{
-  margin-top: 14px;
+  margin-top: 12px;
   border-top: 1px dashed rgba(0,0,0,0.18);
   padding-top: 12px;
   text-align:center;
@@ -251,17 +248,20 @@ div.stButton > button{
   font-size: 28px;
   line-height: 1.25;
 }
+
+/* A4 출력용(인쇄) */
+@page { size: A4; margin: 12mm; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
 # -----------------------------
-# 상단
+# 상단 UI
 # -----------------------------
 st.title("맘스락 식단 변경 프로그램")
 
-top1, top2, top3, top4 = st.columns([1.1, 1.1, 1.0, 1.2], vertical_alignment="center")
+top1, top2, top3 = st.columns([1.2, 1.0, 1.8], vertical_alignment="center")
 
 with top1:
     y, m = st.session_state.ym
@@ -283,52 +283,59 @@ with top2:
     st.session_state.people_count = st.text_input("인원(예: 1인)", value=st.session_state.people_count)
 
 with top3:
-    st.caption("데이터")
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns([1.1, 1.1, 1.1])
     with c1:
-        if st.button("백업 ZIP 만들기"):
-            mem = io.BytesIO()
-            with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as z:
-                for p in [BASE_MENU_PATH, CHANGE_MENU_PATH, DELIVERY_PATH, MENU_INDEX_PATH]:
-                    if p.exists():
-                        z.writestr(p.name, p.read_bytes())
-            mem.seek(0)
-            st.download_button(
-                "ZIP 다운로드",
-                data=mem.getvalue(),
-                file_name=f"moms_diet_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                mime="application/zip",
-            )
+        st.session_state.vendor_name = st.text_input("업체명", value=st.session_state.vendor_name)
     with c2:
-        up = st.file_uploader("백업 ZIP 복원", type=["zip"], label_visibility="collapsed")
-        if up is not None:
-            try:
-                b = io.BytesIO(up.read())
-                with zipfile.ZipFile(b, "r") as z:
-                    names = z.namelist()
-                    for fname in ["base_menu.csv", "change_menu.csv", "delivery.csv", "menu_index.csv"]:
-                        if fname in names:
-                            (DATA_DIR / fname).write_bytes(z.read(fname))
-                st.success("복원 완료")
-                st.rerun()
-            except Exception as e:
-                st.error(f"복원 실패: {e}")
+        st.session_state.vendor_phone = st.text_input("업체 전화", value=st.session_state.vendor_phone)
+    with c3:
+        st.session_state.kapma_phone = st.text_input("동약협회 전화", value=st.session_state.kapma_phone)
 
-with top4:
-    st.caption("로고/이미지")
-    st.write("assets 폴더에 아래 파일을 두면 자동 반영됩니다.")
-    st.code("assets/moms_logo.png\nassets/kapma_logo.png\nassets/gongyang_bowl.png", language="text")
+st.caption("로고/이미지 파일: assets/moms_logo.png, assets/kapma_logo.png, assets/gongyang_bowl.png")
+st.divider()
+
+# -----------------------------
+# 백업/복원
+# -----------------------------
+b1, b2 = st.columns([1.0, 1.0])
+with b1:
+    if st.button("백업 ZIP 만들기"):
+        mem = io.BytesIO()
+        with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as z:
+            for p in [BASE_MENU_PATH, CHANGE_MENU_PATH, DELIVERY_PATH, MENU_INDEX_PATH]:
+                if p.exists():
+                    z.writestr(p.name, p.read_bytes())
+        mem.seek(0)
+        st.download_button(
+            "ZIP 다운로드",
+            data=mem.getvalue(),
+            file_name=f"moms_diet_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+            mime="application/zip",
+        )
+with b2:
+    up = st.file_uploader("백업 ZIP 복원", type=["zip"])
+    if up is not None:
+        try:
+            b = io.BytesIO(up.read())
+            with zipfile.ZipFile(b, "r") as z:
+                names = z.namelist()
+                for fname in ["base_menu.csv", "change_menu.csv", "delivery.csv", "menu_index.csv"]:
+                    if fname in names:
+                        (DATA_DIR / fname).write_bytes(z.read(fname))
+            st.success("복원 완료")
+            st.rerun()
+        except Exception as e:
+            st.error(f"복원 실패: {e}")
 
 st.divider()
 
 # -----------------------------
-# 날짜 편집 다이얼로그 (✅ nonlocal 제거: CSV 재로딩/저장 방식)
+# 입력 다이얼로그
 # -----------------------------
 @st.dialog("식단 입력")
 def edit_day_dialog(d: date):
     dstr = _to_date_str(d)
 
-    # 매번 최신 상태로 읽어오기(동시성/캐시 문제도 줄임)
     _base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
     _change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
     _delivery_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
@@ -338,7 +345,6 @@ def edit_day_dialog(d: date):
     cur_change = _get_value(_change_df, dstr, "change_menu")
     cur_del = _get_delivery(_delivery_df, dstr)
 
-    # 인덱스(정렬)
     _menu_index_df["name"] = _menu_index_df["name"].fillna("").astype(str).str.strip()
     _menu_index_df = _menu_index_df[_menu_index_df["name"] != ""].drop_duplicates().sort_values("name")
     menu_list = _menu_index_df["name"].tolist()
@@ -346,22 +352,22 @@ def edit_day_dialog(d: date):
     st.subheader(d.strftime("%Y-%m-%d (%a)"))
 
     st.markdown("**기본 메뉴**")
-    bcols = st.columns([1.0, 2.0])
-    with bcols[0]:
-        b_pick = st.selectbox("인덱스 선택", options=["(선택 없음)"] + menu_list, index=0, key=f"b_pick_{dstr}")
-    with bcols[1]:
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        b_pick = st.selectbox("인덱스", ["(선택 없음)"] + menu_list, index=0, key=f"b_pick_{dstr}")
+    with c2:
         base_text = st.text_input("직접 입력", value=cur_base, key=f"b_txt_{dstr}")
     if b_pick != "(선택 없음)":
         base_text = b_pick
 
     st.markdown("**변경 메뉴**")
-    ccols = st.columns([1.0, 2.0])
-    with ccols[0]:
-        c_pick = st.selectbox("인덱스 선택", options=["(선택 없음)"] + menu_list, index=0, key=f"c_pick_{dstr}")
-    with ccols[1]:
+    c3, c4 = st.columns([1, 2])
+    with c3:
+        ch_pick = st.selectbox("인덱스", ["(선택 없음)"] + menu_list, index=0, key=f"c_pick_{dstr}")
+    with c4:
         change_text = st.text_input("직접 입력", value=cur_change, key=f"c_txt_{dstr}")
-    if c_pick != "(선택 없음)":
-        change_text = c_pick
+    if ch_pick != "(선택 없음)":
+        change_text = ch_pick
 
     st.markdown("**배달**")
     del_opt = st.radio(
@@ -374,14 +380,12 @@ def edit_day_dialog(d: date):
     yn = "Y" if del_opt == "배달" else "N"
 
     st.divider()
-    save_cols = st.columns([1, 1, 2])
-
-    with save_cols[0]:
+    s1, s2 = st.columns([1, 1])
+    with s1:
         if st.button("저장", use_container_width=True):
             base_text2 = _normalize_menu_text(base_text)
             change_text2 = _normalize_menu_text(change_text)
 
-            # 저장: CSV 재로딩 -> 수정 -> 저장
             base_df2 = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
             change_df2 = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
             delivery_df2 = _read_csv(DELIVERY_PATH, ["date", "delivery"])
@@ -394,7 +398,7 @@ def edit_day_dialog(d: date):
             change_df2.to_csv(CHANGE_MENU_PATH, index=False, encoding="utf-8-sig")
             delivery_df2.to_csv(DELIVERY_PATH, index=False, encoding="utf-8-sig")
 
-            # 인덱스 누적 저장(가나다 정렬)
+            # 인덱스 누적
             new_items = [x for x in [base_text2, change_text2] if x]
             if new_items:
                 idx_df = _read_csv(MENU_INDEX_PATH, ["name"])
@@ -405,210 +409,108 @@ def edit_day_dialog(d: date):
                 idx_df.to_csv(MENU_INDEX_PATH, index=False, encoding="utf-8-sig")
 
             st.rerun()
-
-    with save_cols[1]:
+    with s2:
         if st.button("닫기", use_container_width=True):
             st.rerun()
 
-
 # -----------------------------
-# 달력 렌더 (월~금만)
+# 달력 데이터(월~금)
 # -----------------------------
 y, m = st.session_state.ym
-cal = calendar.Calendar(firstweekday=0)
-month_days = list(cal.itermonthdates(y, m))
+cal = calendar.Calendar(firstweekday=0)  # 월 시작
+days_mon_fri = [d for d in cal.itermonthdates(y, m) if d.month == m and d.weekday() < 5]
 
-weeks = []
-week = []
-for d in month_days:
-    if d.weekday() < 5:
-        week.append(d)
-    if d.weekday() == 6:
-        if week:
-            weeks.append(week)
-        week = []
-if week:
-    weeks.append(week)
+# 포스터 그리드(월 시작 위치 맞춤)
+first_wd = date(y, m, 1).weekday()  # 월=0
+pad_left = first_wd if first_wd < 5 else 0
+poster_cells = [None] * pad_left + days_mon_fri
+while len(poster_cells) % 5 != 0:
+    poster_cells.append(None)
 
-weekday_names = ["월", "화", "수", "목", "금"]
-
-st.subheader(_month_title(y, m))
-
-# 요일 헤더(불필요한 빈줄 없음)
-wcols = st.columns(5)
-for i, w in enumerate(weekday_names):
-    with wcols[i]:
-        st.markdown(f"**{w}**")
-
-def cell_status(d: date):
-    dstr = _to_date_str(d)
-    if d.month != m:
-        return "out", "", "", "", False
-
-    b = _get_value(base_df, dstr, "base_menu").strip()
-    c = _get_value(change_df, dstr, "change_menu").strip()
-    del_ = _get_delivery(delivery_df, dstr).strip().upper()
+def _cell_bg_and_lines(d: date):
+    ds = _to_date_str(d)
+    b = _get_value(base_df, ds, "base_menu").strip()
+    c = _get_value(change_df, ds, "change_menu").strip()
+    del_ = _get_delivery(delivery_df, ds).strip().upper()
     no_delivery = (del_ == "N")
 
     if c and no_delivery:
         bg = "bg-both"
-        badge = "변경+배달불요"
     elif c:
         bg = "bg-change"
-        badge = "변경"
     elif no_delivery:
         bg = "bg-nodelivery"
-        badge = "배달불요"
     else:
         bg = "bg-base"
-        badge = "기본"
 
-    return bg, badge, b, c, no_delivery
+    lines = []
+    if b:
+        lines.append(("기본", b))
+    if c:
+        lines.append(("변경", c))
+    if no_delivery:
+        lines.append(("배달", "불요"))
+    return bg, lines
 
-for w in weeks:
+# -----------------------------
+# 입력용 달력(클릭)
+# -----------------------------
+st.subheader(_month_title(y, m))
+wcols = st.columns(5)
+for i, w in enumerate(["월", "화", "수", "목", "금"]):
+    with wcols[i]:
+        st.markdown(f"**{w}**")
+
+# 주 단위 표시를 위해: 월~금만 구성하여 5칸씩 렌더
+rows = [poster_cells[i:i+5] for i in range(0, len(poster_cells), 5)]
+for r in rows:
     cols = st.columns(5, gap="small")
-    day_map = {d.weekday(): d for d in w}
-    for wd in range(5):
-        with cols[wd]:
-            d = day_map.get(wd, None)
-            if d is None or d.month != m:
-                st.markdown('<div class="cal-cell bg-base" style="opacity:0.25;"></div>', unsafe_allow_html=True)
+    for i, d in enumerate(r):
+        with cols[i]:
+            if d is None:
+                st.markdown('<div class="poster cell" style="opacity:.18; min-height:68px;"></div>', unsafe_allow_html=True)
                 continue
-
-            bg, badge, b, c, no_delivery = cell_status(d)
-            dstr = _to_date_str(d)
-
-            if st.button(f"{d.day}", key=f"daybtn_{dstr}", use_container_width=True):
+            key = _to_date_str(d)
+            if st.button(f"{d.day}", key=f"day_{key}", use_container_width=True):
                 edit_day_dialog(d)
-
-            lines = []
-            if b:
-                lines.append(("기본", b))
-            if c:
-                lines.append(("변경", c))
-            if no_delivery:
-                lines.append(("배달", "불요"))
-
-            html_lines = ""
-            for lab, txt in lines[:3]:
-                html_lines += f'<div class="itemline"><span class="itemlabel">{lab}</span>{txt}</div>'
-
-            st.markdown(
-                f"""
-<div class="cal-cell {bg}">
-  <div class="dayline">
-    <span class="badge">{badge}</span>
-  </div>
-  {html_lines if html_lines else '<div class="itemline" style="opacity:0.40;">&nbsp;</div>'}
-</div>
-""",
-                unsafe_allow_html=True,
-            )
 
 st.divider()
 
 # -----------------------------
-# 업체 전달용 문자(복사용) - 설명문구 없음
+# 포스터(스크린샷용): 달력 형태 + 공양게(화면용)
 # -----------------------------
-def build_vendor_text(year: int, month: int) -> str:
-    cal2 = calendar.Calendar(firstweekday=0)
-    days = [d for d in cal2.itermonthdates(year, month) if d.month == month and d.weekday() < 5]
+moms_b64 = _b64_image_if_exists(MOMS_LOGO_PATH)
+kapma_b64 = _b64_image_if_exists(KAPMA_LOGO_PATH)
+bowl_b64 = _b64_image_if_exists(BOWL_IMG_PATH)
 
-    changes = []
-    nod = []
-    for d in days:
-        ds = _to_date_str(d)
-        c = _get_value(change_df, ds, "change_menu").strip()
-        del_ = _get_delivery(delivery_df, ds).strip().upper()
-        if c:
-            changes.append((d, c))
-        if del_ == "N":
-            nod.append(d)
+moms_html = f'<img src="{moms_b64}" style="max-height:70px;max-width:100%;object-fit:contain;" />' if moms_b64 else '<div style="font-weight:900;font-size:18px;">MOMS</div>'
+kapma_html = f'<img src="{kapma_b64}" style="max-height:70px;max-width:100%;object-fit:contain;" />' if kapma_b64 else '<div style="font-weight:900;font-size:18px;">동약협회</div>'
+bowl_html = f'<img src="{bowl_b64}" style="max-height:92px;max-width:100%;object-fit:contain;" />' if bowl_b64 else ""
 
-    title = f"동약협회입니다.\n{year}년 {month:02d}월 도시락 변경/배달불요 내역입니다.\n"
-    parts = [title]
+gongyang_html = (
+    "이 음식이 어디에서 왔는가<br/>"
+    "내 덕행으로는 받기가 부끄럽네<br/>"
+    "마음의 온갖 탐욕을 떠나<br/>"
+    "바른 생각으로 이 공양을 받습니다"
+)
 
-    if nod:
-        parts.append("🚫【배달불요】")
-        for d in nod:
-            parts.append(f"▶ {d.month:02d}/{d.day:02d}({['월','화','수','목','금','토','일'][d.weekday()]}) : 배달불요")
-        parts.append("")
-
-    if changes:
-        parts.append("🟨【변경메뉴】")
-        for d, c in changes:
-            parts.append(f"▶ {d.month:02d}/{d.day:02d}({['월','화','수','목','금','토','일'][d.weekday()]}) : {c}")
-        parts.append("")
-
-    return "\n".join(parts).strip()
-
-left, right = st.columns([1.2, 1.0], gap="large")
-
-with left:
-    st.subheader("업체 전달용 문자(복사)")
-    txt = build_vendor_text(y, m)
-    st.text_area("", value=txt, height=220, label_visibility="collapsed")
-
-with right:
-    st.subheader("포스터(스크린샷용) 미리보기")
-
-    moms_b64 = _b64_image_if_exists(MOMS_LOGO_PATH)
-    kapma_b64 = _b64_image_if_exists(KAPMA_LOGO_PATH)
-    bowl_b64 = _b64_image_if_exists(BOWL_IMG_PATH)
-
-    cal3 = calendar.Calendar(firstweekday=0)
-    days = [d for d in cal3.itermonthdates(y, m) if d.month == m and d.weekday() < 5]
-    first_wd = date(y, m, 1).weekday()
-    pad_left = first_wd if first_wd < 5 else 0
-    poster_cells = [None] * pad_left + days
-    while len(poster_cells) % 5 != 0:
-        poster_cells.append(None)
-
-    def poster_cell_html(d: date | None) -> str:
-        if d is None:
-            return '<div class="cell" style="opacity:0.18;"></div>'
-        ds = _to_date_str(d)
-        b = _get_value(base_df, ds, "base_menu").strip()
-        c = _get_value(change_df, ds, "change_menu").strip()
-        del_ = _get_delivery(delivery_df, ds).strip().upper()
-        no_delivery = (del_ == "N")
-
-        if c and no_delivery:
-            bg = "background: linear-gradient(135deg, rgba(255,245,180,0.55), rgba(255,205,205,0.50));"
-        elif c:
-            bg = "background: rgba(255,245,180,0.55);"
-        elif no_delivery:
-            bg = "background: rgba(255,205,205,0.50);"
-        else:
-            bg = "background: rgba(255,255,255,0.95);"
-
-        lines = []
-        if b:
-            lines.append(f'<div class="t"><b>기본</b> {b}</div>')
-        if c:
-            lines.append(f'<div class="t"><b>변경</b> {c}</div>')
-        if no_delivery:
-            lines.append(f'<div class="t"><b>배달</b> 불요</div>')
-
-        return f"""
-<div class="cell" style="{bg}">
+def poster_cell_html(d: date | None) -> str:
+    if d is None:
+        return '<div class="cell bg-base" style="opacity:.18;"></div>'
+    bg, lines = _cell_bg_and_lines(d)
+    line_html = ""
+    for lab, txt in lines[:3]:
+        line_html += f'<div class="t"><b>{lab}</b> {txt}</div>'
+    if not line_html:
+        line_html = '<div class="t" style="opacity:.35;">&nbsp;</div>'
+    return f"""
+<div class="cell {bg}">
   <div class="d">{d.day}</div>
-  {''.join(lines) if lines else '<div class="t" style="opacity:0.35;">&nbsp;</div>'}
+  {line_html}
 </div>
 """
 
-    gongyang_text = (
-        "이 음식이 어디에서 왔는가\n"
-        "내 덕행으로는 받기가 부끄럽네\n"
-        "마음의 온갖 탐욕을 떠나\n"
-        "바른 생각으로 이 공양을 받습니다"
-    ).replace("\n", "<br/>")
-
-    moms_html = f'<img src="{moms_b64}" style="max-height:68px;max-width:100%;object-fit:contain;" />' if moms_b64 else '<div style="font-weight:900;font-size:18px;">MOMS</div>'
-    kapma_html = f'<img src="{kapma_b64}" style="max-height:68px;max-width:100%;object-fit:contain;" />' if kapma_b64 else '<div style="font-weight:900;font-size:18px;">동약협회</div>'
-    bowl_html = f'<img src="{bowl_b64}" style="max-height:88px;max-width:100%;object-fit:contain;" />' if bowl_b64 else ""
-
-    poster_html = f"""
+poster_html = f"""
 <div class="poster-wrap">
   <div class="poster">
     <div class="toprow">
@@ -620,38 +522,37 @@ with right:
     <div class="title">맘스락 {m:02d}월<br/>식단(배달) 변경</div>
     <div class="subtitle">( 인원 : {st.session_state.people_count.strip() or "1"}인 )</div>
 
-    <div class="calendar-grid">
-      {''.join([poster_cell_html(d) for d in poster_cells])}
+    <div class="dow">
+      <div class="h">월</div><div class="h">화</div><div class="h">수</div><div class="h">목</div><div class="h">금</div>
     </div>
 
-    <div class="gongyang">{gongyang_text}</div>
+    <div class="grid">
+      {''.join(poster_cell_html(d) for d in poster_cells)}
+    </div>
+
+    <div class="gongyang">{gongyang_html}</div>
   </div>
 </div>
 """
 
-    components.html(poster_html, height=980, scrolling=True)
+st.subheader("포스터(스크린샷용) 미리보기")
+components.html(poster_html, height=980, scrolling=True)
 
 st.divider()
 
 # -----------------------------
-# A4 1페이지 HTML 출력 (안내문구 없음)
+# A4 출력용 포스터(업체 전달용) : 제목+로고+그릇+달력+공양게+연락처까지 1페이지
 # -----------------------------
-def build_a4_html(year: int, month: int) -> str:
+def build_a4_poster_html(year: int, month: int) -> str:
     moms_b64 = _b64_image_if_exists(MOMS_LOGO_PATH)
     kapma_b64 = _b64_image_if_exists(KAPMA_LOGO_PATH)
     bowl_b64 = _b64_image_if_exists(BOWL_IMG_PATH)
 
-    moms_html = f'<img src="{moms_b64}" style="height:20mm;max-width:100%;object-fit:contain;" />' if moms_b64 else '<div style="font-weight:900;font-size:18px;">MOMS</div>'
-    kapma_html = f'<img src="{kapma_b64}" style="height:20mm;max-width:100%;object-fit:contain;" />' if kapma_b64 else '<div style="font-weight:900;font-size:18px;">동약협회</div>'
+    moms_html = f'<img src="{moms_b64}" style="height:20mm;max-width:100%;object-fit:contain;" />' if moms_b64 else '<div style="font-weight:900;font-size:16pt;">MOMS</div>'
+    kapma_html = f'<img src="{kapma_b64}" style="height:20mm;max-width:100%;object-fit:contain;" />' if kapma_b64 else '<div style="font-weight:900;font-size:16pt;">동약협회</div>'
     bowl_html = f'<img src="{bowl_b64}" style="height:26mm;max-width:100%;object-fit:contain;" />' if bowl_b64 else ""
 
-    gongyang_text = (
-        "이 음식이 어디에서 왔는가\n"
-        "내 덕행으로는 받기가 부끄럽네\n"
-        "마음의 온갖 탐욕을 떠나\n"
-        "바른 생각으로 이 공양을 받습니다"
-    ).replace("\n", "<br/>")
-
+    # 월~금 셀(패딩 포함)
     calx = calendar.Calendar(firstweekday=0)
     days = [d for d in calx.itermonthdates(year, month) if d.month == month and d.weekday() < 5]
     first_wd = date(year, month, 1).weekday()
@@ -663,34 +564,38 @@ def build_a4_html(year: int, month: int) -> str:
     def cell(d: date | None) -> str:
         if d is None:
             return '<div class="c empty"></div>'
-        ds = _to_date_str(d)
-        b = _get_value(base_df, ds, "base_menu").strip()
-        c = _get_value(change_df, ds, "change_menu").strip()
-        del_ = _get_delivery(delivery_df, ds).strip().upper()
-        no_delivery = (del_ == "N")
-
+        bg, lines = _cell_bg_and_lines(d)
+        # bg 클래스 -> A4용 클래스 매핑
         cls = "base"
-        if c and no_delivery:
-            cls = "both"
-        elif c:
+        if bg == "bg-change":
             cls = "chg"
-        elif no_delivery:
+        elif bg == "bg-nodelivery":
             cls = "nod"
+        elif bg == "bg-both":
+            cls = "both"
 
-        lines = []
-        if b:
-            lines.append(f"<div><b>기본</b> {b}</div>")
-        if c:
-            lines.append(f"<div><b>변경</b> {c}</div>")
-        if no_delivery:
-            lines.append(f"<div><b>배달</b> 불요</div>")
+        line_html = ""
+        for lab, txt in lines[:3]:
+            line_html += f"<div><b>{lab}</b> {txt}</div>"
+        if not line_html:
+            line_html = '<div style="opacity:.35;">&nbsp;</div>'
 
         return f"""
 <div class="c {cls}">
   <div class="d">{d.day}</div>
-  {''.join(lines) if lines else '<div style="opacity:.35;">&nbsp;</div>'}
+  {line_html}
 </div>
 """
+
+    gong = (
+        "이 음식이 어디에서 왔는가<br/>"
+        "내 덕행으로는 받기가 부끄럽네<br/>"
+        "마음의 온갖 탐욕을 떠나<br/>"
+        "바른 생각으로 이 공양을 받습니다"
+    )
+
+    vendor_line = f"업체: {st.session_state.vendor_name} / {st.session_state.vendor_phone}"
+    kapma_line = f"동약협회: {st.session_state.kapma_phone}"
 
     html_doc = f"""<!doctype html>
 <html lang="ko">
@@ -701,11 +606,13 @@ def build_a4_html(year: int, month: int) -> str:
 <style>
 @page {{ size: A4; margin: 12mm; }}
 * {{ box-sizing: border-box; }}
-body {{ font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:0; }}
+body {{ margin:0; font-family: "Malgun Gothic","Apple SD Gothic Neo",sans-serif; }}
+
 @import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
 
-.wrap {{ width: 100%; }}
-.header {{ display:flex; align-items:center; justify-content:space-between; gap: 8mm; }}
+.header {{
+  display:flex; align-items:center; justify-content:space-between; gap: 8mm;
+}}
 .logo {{
   width: 38%;
   border: 1px solid rgba(0,0,0,0.10);
@@ -714,18 +621,40 @@ body {{ font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:
   display:flex; align-items:center; justify-content:center;
   min-height: 30mm;
 }}
-.mid {{ width: 24%; display:flex; align-items:center; justify-content:center; }}
+.mid {{
+  width: 24%;
+  display:flex; align-items:center; justify-content:center;
+}}
+
 .title {{
   text-align:center; font-weight: 900;
-  font-size: 20pt; line-height: 1.08;
+  font-size: 20pt; line-height: 1.10;
   margin: 6mm 0 2mm 0;
 }}
 .sub {{
   text-align:center; font-weight: 800;
   font-size: 12pt; opacity: .85;
-  margin: 0 0 5mm 0;
+  margin: 0 0 4mm 0;
 }}
-.grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap: 4mm; }}
+
+.dow {{
+  display:grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3mm;
+  margin-bottom: 3mm;
+}}
+.dow div {{
+  text-align:center;
+  font-weight: 900;
+  padding: 2.2mm 0;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.08);
+}}
+
+.grid {{
+  display:grid; grid-template-columns: repeat(5, 1fr); gap: 3mm;
+}}
 .c {{
   border: 1px solid rgba(0,0,0,0.10);
   border-radius: 12px;
@@ -733,11 +662,19 @@ body {{ font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:
   min-height: 28mm;
   background: rgba(255,255,255,0.96);
 }}
-.c .d {{ font-weight: 900; font-size: 12pt; margin-bottom: 2mm; }}
-.c div {{ font-size: 9.2pt; line-height: 1.22; margin: 0.8mm 0; }}
-.c.chg {{ background: rgba(255,245,180,0.55); }}
-.c.nod {{ background: rgba(255,205,205,0.50); }}
-.c.both {{ background: linear-gradient(135deg, rgba(255,245,180,0.55), rgba(255,205,205,0.50)); }}
+.c .d {{
+  font-weight: 900;
+  font-size: 12pt;
+  margin-bottom: 2mm;
+}}
+.c div {{
+  font-size: 9.2pt;
+  line-height: 1.22;
+  margin: 0.8mm 0;
+}}
+.c.chg {{ background: rgba(255,245,180,0.60); }}
+.c.nod {{ background: rgba(255,205,205,0.55); }}
+.c.both {{ background: linear-gradient(135deg, rgba(255,245,180,0.60), rgba(255,205,205,0.55)); }}
 .c.empty {{ opacity: .18; }}
 
 .gong {{
@@ -749,10 +686,21 @@ body {{ font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:
   font-size: 18pt;
   line-height: 1.25;
 }}
+
+.footer {{
+  margin-top: 4mm;
+  border-top: 1px solid rgba(0,0,0,0.10);
+  padding-top: 3mm;
+  display:flex;
+  justify-content:space-between;
+  gap: 8mm;
+  font-size: 10.5pt;
+  font-weight: 800;
+}}
+.footer .muted {{ opacity: .85; font-weight: 800; }}
 </style>
 </head>
 <body>
-<div class="wrap">
   <div class="header">
     <div class="logo">{moms_html}</div>
     <div class="mid">{bowl_html}</div>
@@ -762,30 +710,36 @@ body {{ font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:
   <div class="title">맘스락 {month:02d}월<br/>식단(배달) 변경</div>
   <div class="sub">( 인원 : {st.session_state.people_count.strip() or "1"}인 )</div>
 
-  <div class="grid">
-    {''.join([cell(d) for d in cells])}
+  <div class="dow">
+    <div>월</div><div>화</div><div>수</div><div>목</div><div>금</div>
   </div>
 
-  <div class="gong">{gongyang_text}</div>
-</div>
+  <div class="grid">
+    {''.join(cell(d) for d in cells)}
+  </div>
+
+  <div class="gong">{gong}</div>
+
+  <div class="footer">
+    <div class="muted">{vendor_line}</div>
+    <div class="muted">{kapma_line}</div>
+  </div>
 </body>
 </html>
 """
     return html_doc
 
+a4_html = build_a4_poster_html(y, m)
 
-a4_html = build_a4_html(y, m)
-
-dcols = st.columns([1.3, 1.7])
-with dcols[0]:
-    st.subheader("업체 전달용 파일 출력")
+st.subheader("업체 전달용 A4 출력(1페이지 포스터)")
+c1, c2 = st.columns([1.0, 1.4])
+with c1:
     st.download_button(
-        "A4 HTML 다운로드",
+        "A4 포스터 HTML 다운로드",
         data=a4_html.encode("utf-8"),
-        file_name=f"맘스락_{y}_{m:02d}_A4_1page.html",
+        file_name=f"맘스락_{y}_{m:02d}_A4_포스터.html",
         mime="text/html",
         use_container_width=True,
     )
-with dcols[1]:
-    st.subheader("A4 미리보기(인쇄 → PDF)")
-    components.html(a4_html, height=680, scrolling=True)
+with c2:
+    components.html(a4_html, height=720, scrolling=True)
