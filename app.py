@@ -34,10 +34,12 @@ MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 ASSETS_DIR = APP_DIR / "assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-# 로고/이미지 파일 (없으면 텍스트로 대체)
+# 기본 파일명(있으면 자동 사용)
 MOMS_LOGO_PATH = ASSETS_DIR / "moms_logo.png"
 KAPMA_LOGO_PATH = ASSETS_DIR / "kapma_logo.png"
-BOWL_IMG_PATH = ASSETS_DIR / "gongyang_bowl.png"  # 그릇 그림
+BOWL_IMG_PATH = ASSETS_DIR / "gongyang_bowl.png"  # 그릇 그림(선택)
+
+KAPMA_PHONE_FIXED = "010-7101-5871"
 
 # -----------------------------
 # 유틸
@@ -53,22 +55,25 @@ def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     for c in columns:
         if c not in df.columns:
             df[c] = ""
-    df = df[columns].fillna("")
-    return df
+    return df[columns].fillna("")
 
 
 def _to_date_str(d: date) -> str:
     return d.isoformat()
 
 
+def _b64_bytes(data: bytes, ext: str = "png") -> str:
+    b64 = base64.b64encode(data).decode("ascii")
+    ext = ext.lower().lstrip(".")
+    mime = "png" if ext == "png" else ("jpeg" if ext in ["jpg", "jpeg"] else ext)
+    return f"data:image/{mime};base64,{b64}"
+
+
 def _b64_image_if_exists(path: Path) -> str | None:
     if not path.exists():
         return None
-    data = path.read_bytes()
-    b64 = base64.b64encode(data).decode("ascii")
-    ext = path.suffix.lower().lstrip(".")
-    mime = "png" if ext == "png" else ("jpeg" if ext in ["jpg", "jpeg"] else ext)
-    return f"data:image/{mime};base64,{b64}"
+    ext = path.suffix.lower().lstrip(".") or "png"
+    return _b64_bytes(path.read_bytes(), ext=ext)
 
 
 def _normalize_menu_text(s: str) -> str:
@@ -81,8 +86,7 @@ def _save_row(df: pd.DataFrame, key_date: str, col: str, value: str) -> pd.DataF
     if mask.any():
         df.loc[mask, col] = value
     else:
-        new = pd.DataFrame([{"date": key_date, col: value}])
-        df = pd.concat([df, new], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame([{"date": key_date, col: value}])], ignore_index=True)
     return df
 
 
@@ -100,16 +104,12 @@ def _save_delivery(df: pd.DataFrame, key_date: str, yn: str) -> pd.DataFrame:
 
 def _get_value(df: pd.DataFrame, key_date: str, col: str) -> str:
     sub = df[df["date"] == key_date]
-    if len(sub) == 0:
-        return ""
-    return str(sub.iloc[0].get(col, "") or "")
+    return "" if len(sub) == 0 else str(sub.iloc[0].get(col, "") or "")
 
 
 def _get_delivery(df: pd.DataFrame, key_date: str) -> str:
     sub = df[df["date"] == key_date]
-    if len(sub) == 0:
-        return ""
-    return str(sub.iloc[0].get("delivery", "") or "")
+    return "" if len(sub) == 0 else str(sub.iloc[0].get("delivery", "") or "")
 
 
 def _month_title(year: int, month: int) -> str:
@@ -122,25 +122,26 @@ def _load_state():
         st.session_state.ym = (today.year, today.month)
     if "people_count" not in st.session_state:
         st.session_state.people_count = "1"
-    if "vendor_name" not in st.session_state:
-        st.session_state.vendor_name = "맘스락(MOMS)"
-    if "vendor_phone" not in st.session_state:
-        st.session_state.vendor_phone = "010-0000-0000"
-    if "kapma_phone" not in st.session_state:
-        st.session_state.kapma_phone = "02-0000-0000"  # ✅ 여기만 부회장님 번호로 바꾸면 됨
 
+    # ✅ 로고를 화면에서 업로드해도 반영되도록(없으면 assets 파일 사용)
+    if "moms_logo_b64" not in st.session_state:
+        st.session_state.moms_logo_b64 = None
+    if "kapma_logo_b64" not in st.session_state:
+        st.session_state.kapma_logo_b64 = None
+    if "bowl_b64" not in st.session_state:
+        st.session_state.bowl_b64 = None
+
+
+_load_state()
 
 # -----------------------------
 # 데이터 로드
 # -----------------------------
-_load_state()
-
 base_df = _read_csv(BASE_MENU_PATH, ["date", "base_menu"])
 change_df = _read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
 delivery_df = _read_csv(DELIVERY_PATH, ["date", "delivery"])
 menu_index_df = _read_csv(MENU_INDEX_PATH, ["name"])
 
-# 메뉴 인덱스 자동 정렬
 menu_index_df["name"] = menu_index_df["name"].fillna("").astype(str).str.strip()
 menu_index_df = menu_index_df[menu_index_df["name"] != ""].drop_duplicates().sort_values("name")
 menu_index_df.to_csv(MENU_INDEX_PATH, index=False, encoding="utf-8-sig")
@@ -161,13 +162,13 @@ div.stButton > button{
   font-weight: 800 !important;
 }
 
-/* 달력 상태 색 */
 .bg-base { background: rgba(255,255,255,0.96); }
-.bg-change { background: rgba(255, 245, 180, 0.60); }
-.bg-nodelivery { background: rgba(255, 205, 205, 0.55); }
-.bg-both { background: linear-gradient(135deg, rgba(255,245,180,0.60), rgba(255,205,205,0.55)); }
+.bg-change { background: rgba(255, 245, 180, 0.62); }
+.bg-nodelivery { background: rgba(255, 205, 205, 0.58); }
+.bg-both { background: linear-gradient(135deg, rgba(255,245,180,0.62), rgba(255,205,205,0.58)); }
 
-/* 포스터(스크린샷) */
+@import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
+
 .poster-wrap{ width:100%; display:flex; justify-content:center; }
 .poster{
   width:100%;
@@ -175,39 +176,74 @@ div.stButton > button{
   background:#fff;
   border-radius:18px;
   border: 1px solid rgba(0,0,0,0.10);
-  padding:16px 16px 12px 16px;
+  padding:16px 16px 14px 16px;
 }
-.poster .toprow{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.poster .logoBox{
-  width: 34%;
-  border: 1px solid rgba(0,0,0,0.10);
-  border-radius: 16px;
-  padding: 10px;
-  display:flex; align-items:center; justify-content:center;
-  min-height: 92px;
-}
-.poster .midBox{
-  width: 32%;
-  display:flex; align-items:center; justify-content:center;
-  min-height: 92px;
-}
+
+/* 제목 */
 .poster .title{
   text-align:center;
   font-weight: 900;
-  font-size: 34px;
-  line-height: 1.10;
-  margin-top: 12px;
-  margin-bottom: 6px;
+  font-size: 36px;
+  line-height: 1.08;
+  margin: 6px 0 10px 0;
 }
 .poster .subtitle{
   text-align:center;
   font-weight: 800;
   font-size: 18px;
   opacity: 0.85;
-  margin-bottom: 12px;
+  margin: 0 0 10px 0;
 }
 
-/* 달력형태(요일행 + 그리드) */
+/* 로고-공양게-로고 1행 */
+.poster .midrow{
+  display:grid;
+  grid-template-columns: 1fr 1.25fr 1fr;
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 12px;
+}
+.poster .logoBox{
+  border: 1px solid rgba(0,0,0,0.10);
+  border-radius: 16px;
+  padding: 10px;
+  min-height: 110px;
+  display:flex;
+  flex-direction: column;
+  align-items:center;
+  justify-content:center;
+  gap: 6px;
+}
+.poster .logoImg{
+  max-height: 66px;
+  max-width: 100%;
+  object-fit: contain;
+}
+.poster .logoText{
+  font-weight: 900;
+  font-size: 18px;
+}
+.poster .kapmaPhone{
+  font-weight: 900;
+  font-size: 15px;
+  opacity: 0.85;
+}
+
+.poster .gongyangBox{
+  border: 1px dashed rgba(0,0,0,0.18);
+  border-radius: 16px;
+  padding: 10px 12px;
+  min-height: 110px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  font-family: 'Nanum Brush Script', '궁서', 'Gungsuh', serif;
+  font-size: 28px;
+  line-height: 1.18;
+}
+
+/* 요일 + 달력 */
 .poster .dow{
   display:grid;
   grid-template-columns: repeat(5, 1fr);
@@ -222,7 +258,6 @@ div.stButton > button{
   background: rgba(0,0,0,0.04);
   border: 1px solid rgba(0,0,0,0.08);
 }
-
 .poster .grid{
   display:grid;
   grid-template-columns: repeat(5, 1fr);
@@ -238,18 +273,7 @@ div.stButton > button{
 .poster .cell .t{ font-size: 12.8px; line-height: 1.25; margin: 2px 0; }
 .poster .cell .t b{ opacity: 0.90; }
 
-@import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
-.poster .gongyang{
-  margin-top: 12px;
-  border-top: 1px dashed rgba(0,0,0,0.18);
-  padding-top: 12px;
-  text-align:center;
-  font-family: 'Nanum Brush Script', '궁서', 'Gungsuh', serif;
-  font-size: 28px;
-  line-height: 1.25;
-}
-
-/* A4 출력용(인쇄) */
+/* A4 출력(1페이지) */
 @page { size: A4; margin: 12mm; }
 </style>
 """,
@@ -283,15 +307,22 @@ with top2:
     st.session_state.people_count = st.text_input("인원(예: 1인)", value=st.session_state.people_count)
 
 with top3:
-    c1, c2, c3 = st.columns([1.1, 1.1, 1.1])
+    st.caption("로고 업로드(선택) - 업로드하면 즉시 포스터/A4에 반영됩니다.")
+    c1, c2, c3 = st.columns(3)
     with c1:
-        st.session_state.vendor_name = st.text_input("업체명", value=st.session_state.vendor_name)
+        up = st.file_uploader("MOMS 로고", type=["png", "jpg", "jpeg"], key="up_moms")
+        if up is not None:
+            st.session_state.moms_logo_b64 = _b64_bytes(up.read(), ext=up.name.split(".")[-1])
     with c2:
-        st.session_state.vendor_phone = st.text_input("업체 전화", value=st.session_state.vendor_phone)
+        up = st.file_uploader("동약협회 로고", type=["png", "jpg", "jpeg"], key="up_kapma")
+        if up is not None:
+            st.session_state.kapma_logo_b64 = _b64_bytes(up.read(), ext=up.name.split(".")[-1])
     with c3:
-        st.session_state.kapma_phone = st.text_input("동약협회 전화", value=st.session_state.kapma_phone)
+        up = st.file_uploader("그릇 그림(선택)", type=["png", "jpg", "jpeg"], key="up_bowl")
+        if up is not None:
+            st.session_state.bowl_b64 = _b64_bytes(up.read(), ext=up.name.split(".")[-1])
 
-st.caption("로고/이미지 파일: assets/moms_logo.png, assets/kapma_logo.png, assets/gongyang_bowl.png")
+st.caption("assets 폴더에 파일이 있으면 자동으로도 들어갑니다: moms_logo.png / kapma_logo.png / gongyang_bowl.png")
 st.divider()
 
 # -----------------------------
@@ -313,7 +344,7 @@ with b1:
             mime="application/zip",
         )
 with b2:
-    up = st.file_uploader("백업 ZIP 복원", type=["zip"])
+    up = st.file_uploader("백업 ZIP 복원", type=["zip"], key="up_zip")
     if up is not None:
         try:
             b = io.BytesIO(up.read())
@@ -398,7 +429,6 @@ def edit_day_dialog(d: date):
             change_df2.to_csv(CHANGE_MENU_PATH, index=False, encoding="utf-8-sig")
             delivery_df2.to_csv(DELIVERY_PATH, index=False, encoding="utf-8-sig")
 
-            # 인덱스 누적
             new_items = [x for x in [base_text2, change_text2] if x]
             if new_items:
                 idx_df = _read_csv(MENU_INDEX_PATH, ["name"])
@@ -414,18 +444,17 @@ def edit_day_dialog(d: date):
             st.rerun()
 
 # -----------------------------
-# 달력 데이터(월~금)
+# 달력(월~금) 셀 만들기
 # -----------------------------
 y, m = st.session_state.ym
-cal = calendar.Calendar(firstweekday=0)  # 월 시작
+cal = calendar.Calendar(firstweekday=0)
 days_mon_fri = [d for d in cal.itermonthdates(y, m) if d.month == m and d.weekday() < 5]
 
-# 포스터 그리드(월 시작 위치 맞춤)
 first_wd = date(y, m, 1).weekday()  # 월=0
 pad_left = first_wd if first_wd < 5 else 0
-poster_cells = [None] * pad_left + days_mon_fri
-while len(poster_cells) % 5 != 0:
-    poster_cells.append(None)
+cells = [None] * pad_left + days_mon_fri
+while len(cells) % 5 != 0:
+    cells.append(None)
 
 def _cell_bg_and_lines(d: date):
     ds = _to_date_str(d)
@@ -461,38 +490,47 @@ for i, w in enumerate(["월", "화", "수", "목", "금"]):
     with wcols[i]:
         st.markdown(f"**{w}**")
 
-# 주 단위 표시를 위해: 월~금만 구성하여 5칸씩 렌더
-rows = [poster_cells[i:i+5] for i in range(0, len(poster_cells), 5)]
+rows = [cells[i:i+5] for i in range(0, len(cells), 5)]
 for r in rows:
     cols = st.columns(5, gap="small")
     for i, d in enumerate(r):
         with cols[i]:
             if d is None:
-                st.markdown('<div class="poster cell" style="opacity:.18; min-height:68px;"></div>', unsafe_allow_html=True)
+                st.write("")
                 continue
-            key = _to_date_str(d)
-            if st.button(f"{d.day}", key=f"day_{key}", use_container_width=True):
+            if st.button(f"{d.day}", key=f"day_{_to_date_str(d)}", use_container_width=True):
                 edit_day_dialog(d)
 
 st.divider()
 
 # -----------------------------
-# 포스터(스크린샷용): 달력 형태 + 공양게(화면용)
+# 로고 b64 결정(업로드 우선 -> assets fallback)
 # -----------------------------
-moms_b64 = _b64_image_if_exists(MOMS_LOGO_PATH)
-kapma_b64 = _b64_image_if_exists(KAPMA_LOGO_PATH)
-bowl_b64 = _b64_image_if_exists(BOWL_IMG_PATH)
+moms_b64 = st.session_state.moms_logo_b64 or _b64_image_if_exists(MOMS_LOGO_PATH)
+kapma_b64 = st.session_state.kapma_logo_b64 or _b64_image_if_exists(KAPMA_LOGO_PATH)
+bowl_b64 = st.session_state.bowl_b64 or _b64_image_if_exists(BOWL_IMG_PATH)
 
-moms_html = f'<img src="{moms_b64}" style="max-height:70px;max-width:100%;object-fit:contain;" />' if moms_b64 else '<div style="font-weight:900;font-size:18px;">MOMS</div>'
-kapma_html = f'<img src="{kapma_b64}" style="max-height:70px;max-width:100%;object-fit:contain;" />' if kapma_b64 else '<div style="font-weight:900;font-size:18px;">동약협회</div>'
-bowl_html = f'<img src="{bowl_b64}" style="max-height:92px;max-width:100%;object-fit:contain;" />' if bowl_b64 else ""
+moms_logo_html = (
+    f'<img class="logoImg" src="{moms_b64}" />' if moms_b64 else '<div class="logoText">MOMS</div>'
+)
+kapma_logo_html = (
+    f'<img class="logoImg" src="{kapma_b64}" />' if kapma_b64 else '<div class="logoText">동약협회</div>'
+)
 
+# 동약협회 박스: "동약협회" + 전화번호(아래줄)
+kapma_box_text = f"""
+<div class="logoText">동약협회</div>
+<div class="kapmaPhone">{KAPMA_PHONE_FIXED}</div>
+"""
+
+# 가운데: 공양게(두 로고 박스 사이) + (선택) 그릇 그림 위에 작게
 gongyang_html = (
     "이 음식이 어디에서 왔는가<br/>"
     "내 덕행으로는 받기가 부끄럽네<br/>"
     "마음의 온갖 탐욕을 떠나<br/>"
     "바른 생각으로 이 공양을 받습니다"
 )
+bowl_html = f'<img class="logoImg" src="{bowl_b64}" style="max-height:44px; margin-bottom:6px;" />' if bowl_b64 else ""
 
 def poster_cell_html(d: date | None) -> str:
     if d is None:
@@ -510,27 +548,41 @@ def poster_cell_html(d: date | None) -> str:
 </div>
 """
 
+# -----------------------------
+# ✅ 포스터(스크린샷용) : 제목 -> (로고/공양게/로고) -> 달력
+# -----------------------------
 poster_html = f"""
 <div class="poster-wrap">
   <div class="poster">
-    <div class="toprow">
-      <div class="logoBox">{moms_html}</div>
-      <div class="midBox">{bowl_html}</div>
-      <div class="logoBox">{kapma_html}</div>
-    </div>
-
-    <div class="title">맘스락 {m:02d}월<br/>식단(배달) 변경</div>
+    <div class="title">맘스락 {m:02d}월 식단(배달) 변경</div>
     <div class="subtitle">( 인원 : {st.session_state.people_count.strip() or "1"}인 )</div>
+
+    <div class="midrow">
+      <div class="logoBox">
+        {moms_logo_html}
+        <div class="logoText">MOMS</div>
+      </div>
+
+      <div class="gongyangBox">
+        <div>
+          {bowl_html}
+          {gongyang_html}
+        </div>
+      </div>
+
+      <div class="logoBox">
+        {kapma_logo_html}
+        {kapma_box_text}
+      </div>
+    </div>
 
     <div class="dow">
       <div class="h">월</div><div class="h">화</div><div class="h">수</div><div class="h">목</div><div class="h">금</div>
     </div>
 
     <div class="grid">
-      {''.join(poster_cell_html(d) for d in poster_cells)}
+      {''.join(poster_cell_html(d) for d in cells)}
     </div>
-
-    <div class="gongyang">{gongyang_html}</div>
   </div>
 </div>
 """
@@ -541,68 +593,16 @@ components.html(poster_html, height=980, scrolling=True)
 st.divider()
 
 # -----------------------------
-# A4 출력용 포스터(업체 전달용) : 제목+로고+그릇+달력+공양게+연락처까지 1페이지
+# ✅ 업체 전달용 A4 출력(1페이지): 포스터와 동일 레이아웃 그대로
 # -----------------------------
-def build_a4_poster_html(year: int, month: int) -> str:
-    moms_b64 = _b64_image_if_exists(MOMS_LOGO_PATH)
-    kapma_b64 = _b64_image_if_exists(KAPMA_LOGO_PATH)
-    bowl_b64 = _b64_image_if_exists(BOWL_IMG_PATH)
-
-    moms_html = f'<img src="{moms_b64}" style="height:20mm;max-width:100%;object-fit:contain;" />' if moms_b64 else '<div style="font-weight:900;font-size:16pt;">MOMS</div>'
-    kapma_html = f'<img src="{kapma_b64}" style="height:20mm;max-width:100%;object-fit:contain;" />' if kapma_b64 else '<div style="font-weight:900;font-size:16pt;">동약협회</div>'
-    bowl_html = f'<img src="{bowl_b64}" style="height:26mm;max-width:100%;object-fit:contain;" />' if bowl_b64 else ""
-
-    # 월~금 셀(패딩 포함)
-    calx = calendar.Calendar(firstweekday=0)
-    days = [d for d in calx.itermonthdates(year, month) if d.month == month and d.weekday() < 5]
-    first_wd = date(year, month, 1).weekday()
-    pad_left = first_wd if first_wd < 5 else 0
-    cells = [None] * pad_left + days
-    while len(cells) % 5 != 0:
-        cells.append(None)
-
-    def cell(d: date | None) -> str:
-        if d is None:
-            return '<div class="c empty"></div>'
-        bg, lines = _cell_bg_and_lines(d)
-        # bg 클래스 -> A4용 클래스 매핑
-        cls = "base"
-        if bg == "bg-change":
-            cls = "chg"
-        elif bg == "bg-nodelivery":
-            cls = "nod"
-        elif bg == "bg-both":
-            cls = "both"
-
-        line_html = ""
-        for lab, txt in lines[:3]:
-            line_html += f"<div><b>{lab}</b> {txt}</div>"
-        if not line_html:
-            line_html = '<div style="opacity:.35;">&nbsp;</div>'
-
-        return f"""
-<div class="c {cls}">
-  <div class="d">{d.day}</div>
-  {line_html}
-</div>
-"""
-
-    gong = (
-        "이 음식이 어디에서 왔는가<br/>"
-        "내 덕행으로는 받기가 부끄럽네<br/>"
-        "마음의 온갖 탐욕을 떠나<br/>"
-        "바른 생각으로 이 공양을 받습니다"
-    )
-
-    vendor_line = f"업체: {st.session_state.vendor_name} / {st.session_state.vendor_phone}"
-    kapma_line = f"동약협회: {st.session_state.kapma_phone}"
-
-    html_doc = f"""<!doctype html>
+def build_a4_html() -> str:
+    # A4에서 좀 더 타이트하게(그러나 안내문구 없음)
+    return f"""<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>맘스락_{year}_{month:02d}_A4</title>
+<title>맘스락_{y}_{m:02d}_A4</title>
 <style>
 @page {{ size: A4; margin: 12mm; }}
 * {{ box-sizing: border-box; }}
@@ -610,132 +610,124 @@ body {{ margin:0; font-family: "Malgun Gothic","Apple SD Gothic Neo",sans-serif;
 
 @import url('https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&display=swap');
 
-.header {{
-  display:flex; align-items:center; justify-content:space-between; gap: 8mm;
+.bg-base {{ background: rgba(255,255,255,0.96); }}
+.bg-change {{ background: rgba(255, 245, 180, 0.62); }}
+.bg-nodelivery {{ background: rgba(255, 205, 205, 0.58); }}
+.bg-both {{ background: linear-gradient(135deg, rgba(255,245,180,0.62), rgba(255,205,205,0.58)); }}
+
+.wrap{{ width:100%; }}
+.title{{ text-align:center; font-weight:900; font-size:22pt; line-height:1.08; margin: 0 0 2mm 0; }}
+.sub{{ text-align:center; font-weight:800; font-size:12pt; opacity:.85; margin: 0 0 4mm 0; }}
+
+.midrow{{
+  display:grid;
+  grid-template-columns: 1fr 1.30fr 1fr;
+  gap: 6mm;
+  align-items: stretch;
+  margin-bottom: 4mm;
 }}
-.logo {{
-  width: 38%;
+.logoBox{{
   border: 1px solid rgba(0,0,0,0.10);
   border-radius: 14px;
-  padding: 6mm;
-  display:flex; align-items:center; justify-content:center;
+  padding: 4mm;
   min-height: 30mm;
+  display:flex;
+  flex-direction: column;
+  align-items:center;
+  justify-content:center;
+  gap: 2mm;
 }}
-.mid {{
-  width: 24%;
-  display:flex; align-items:center; justify-content:center;
+.logoImg{{ max-height: 18mm; max-width: 100%; object-fit: contain; }}
+.logoText{{ font-weight:900; font-size:12pt; }}
+.kapmaPhone{{ font-weight:900; font-size:11pt; opacity:.85; }}
+
+.gongyangBox{{
+  border: 1px dashed rgba(0,0,0,0.18);
+  border-radius: 14px;
+  padding: 4mm 4mm;
+  min-height: 30mm;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  font-family: 'Nanum Brush Script','궁서','Gungsuh',serif;
+  font-size: 18pt;
+  line-height: 1.15;
 }}
 
-.title {{
-  text-align:center; font-weight: 900;
-  font-size: 20pt; line-height: 1.10;
-  margin: 6mm 0 2mm 0;
-}}
-.sub {{
-  text-align:center; font-weight: 800;
-  font-size: 12pt; opacity: .85;
-  margin: 0 0 4mm 0;
-}}
-
-.dow {{
+.dow{{
   display:grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 3mm;
   margin-bottom: 3mm;
 }}
-.dow div {{
+.dow div{{
   text-align:center;
   font-weight: 900;
-  padding: 2.2mm 0;
+  padding: 2mm 0;
   border-radius: 10px;
   background: rgba(0,0,0,0.04);
   border: 1px solid rgba(0,0,0,0.08);
 }}
 
-.grid {{
-  display:grid; grid-template-columns: repeat(5, 1fr); gap: 3mm;
+.grid{{
+  display:grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3mm;
 }}
-.c {{
+.cell{{
   border: 1px solid rgba(0,0,0,0.10);
   border-radius: 12px;
-  padding: 3.5mm;
+  padding: 3mm;
   min-height: 28mm;
-  background: rgba(255,255,255,0.96);
 }}
-.c .d {{
-  font-weight: 900;
-  font-size: 12pt;
-  margin-bottom: 2mm;
-}}
-.c div {{
-  font-size: 9.2pt;
-  line-height: 1.22;
-  margin: 0.8mm 0;
-}}
-.c.chg {{ background: rgba(255,245,180,0.60); }}
-.c.nod {{ background: rgba(255,205,205,0.55); }}
-.c.both {{ background: linear-gradient(135deg, rgba(255,245,180,0.60), rgba(255,205,205,0.55)); }}
-.c.empty {{ opacity: .18; }}
-
-.gong {{
-  margin-top: 6mm;
-  border-top: 1px dashed rgba(0,0,0,0.18);
-  padding-top: 4mm;
-  text-align:center;
-  font-family: 'Nanum Brush Script','궁서','Gungsuh',serif;
-  font-size: 18pt;
-  line-height: 1.25;
-}}
-
-.footer {{
-  margin-top: 4mm;
-  border-top: 1px solid rgba(0,0,0,0.10);
-  padding-top: 3mm;
-  display:flex;
-  justify-content:space-between;
-  gap: 8mm;
-  font-size: 10.5pt;
-  font-weight: 800;
-}}
-.footer .muted {{ opacity: .85; font-weight: 800; }}
+.d{{ font-weight:900; font-size:12pt; margin-bottom:1.5mm; }}
+.t{{ font-size:9.2pt; line-height:1.22; margin: .6mm 0; }}
 </style>
 </head>
 <body>
-  <div class="header">
-    <div class="logo">{moms_html}</div>
-    <div class="mid">{bowl_html}</div>
-    <div class="logo">{kapma_html}</div>
-  </div>
-
-  <div class="title">맘스락 {month:02d}월<br/>식단(배달) 변경</div>
+<div class="wrap">
+  <div class="title">맘스락 {m:02d}월 식단(배달) 변경</div>
   <div class="sub">( 인원 : {st.session_state.people_count.strip() or "1"}인 )</div>
+
+  <div class="midrow">
+    <div class="logoBox">
+      {moms_logo_html}
+      <div class="logoText">MOMS</div>
+    </div>
+
+    <div class="gongyangBox">
+      <div>
+        {bowl_html}
+        {gongyang_html}
+      </div>
+    </div>
+
+    <div class="logoBox">
+      {kapma_logo_html}
+      {kapma_box_text}
+    </div>
+  </div>
 
   <div class="dow">
     <div>월</div><div>화</div><div>수</div><div>목</div><div>금</div>
   </div>
 
   <div class="grid">
-    {''.join(cell(d) for d in cells)}
+    {''.join(poster_cell_html(d) for d in cells)}
   </div>
-
-  <div class="gong">{gong}</div>
-
-  <div class="footer">
-    <div class="muted">{vendor_line}</div>
-    <div class="muted">{kapma_line}</div>
-  </div>
+</div>
 </body>
 </html>
 """
-    return html_doc
 
-a4_html = build_a4_poster_html(y, m)
+a4_html = build_a4_html()
 
-st.subheader("업체 전달용 A4 출력(1페이지 포스터)")
+st.subheader("업체 전달용 A4 출력(1페이지)")
 c1, c2 = st.columns([1.0, 1.4])
 with c1:
     st.download_button(
-        "A4 포스터 HTML 다운로드",
+        "A4 HTML 다운로드",
         data=a4_html.encode("utf-8"),
         file_name=f"맘스락_{y}_{m:02d}_A4_포스터.html",
         mime="text/html",
