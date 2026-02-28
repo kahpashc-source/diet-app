@@ -17,7 +17,11 @@ import streamlit.components.v1 as components
 # -----------------------------
 # 기본 설정
 # -----------------------------
-st.set_page_config(page_title="맘스락 식단 관리 시스템", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(
+    page_title="맘스락 식단 변경 프로그램",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -31,10 +35,9 @@ CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"
 DELIVERY_PATH = DATA_DIR / "delivery.csv"
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"
 
-# 이미지(있으면 자동 반영)
+# (예전 기능용) 로고/이미지 파일은 있어도 되고 없어도 됩니다.
 MOMS_LOGO_PATH = ASSETS_DIR / "moms_logo.png"
-KAPMA_LOGO_PATH = ASSETS_DIR / "kapma_logo.png"   # 선택
-DOSIRAK_PATH = ASSETS_DIR / "dosirak.png"
+KAPMA_LOGO_PATH = ASSETS_DIR / "kapma_logo.png"
 BOWL_PATH = ASSETS_DIR / "gongyang_bowl.png"
 
 GONGYANG_TEXT = (
@@ -142,11 +145,24 @@ if "menu_index_df" not in st.session_state:
 
 
 # -----------------------------
-# 최소 CSS (달력 버튼 + 헤더)
+# CSS (달력/표시만: 예전처럼 단순 안정)
 # -----------------------------
 st.markdown(
     """
 <style>
+.block-container { padding-top: 0.9rem; padding-bottom: 1.2rem; }
+
+.gongyang-wrap{
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(0,0,0,0.08);
+  box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+  margin-bottom: 12px;
+}
+.gongyang-head{ font-weight:900; font-size: 13px; opacity: 0.7; margin-bottom: 6px; }
+.gongyang-text{ font-weight:900; font-size: 18px; line-height: 1.45; white-space: pre-line; }
+
 .cal-head{ text-align:center; font-weight:900; opacity:0.75; padding: 4px 0 10px 0; }
 .stButton>button{
   border-radius: 14px !important;
@@ -156,39 +172,34 @@ st.markdown(
   white-space: pre-line !important;
 }
 .today-outline{ outline: 3px solid rgba(255, 170, 0, 0.55); outline-offset:-3px; border-radius: 14px; }
-.small-muted{ font-size:12px; opacity:0.72; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
 # -----------------------------
-# 상단(안정형)
+# ✅ 상단: 공양게 + 글귀만
 # -----------------------------
-top1, top2, top3 = st.columns([0.9, 1.2, 1.4], vertical_alignment="center")
-
-with top1:
-    if MOMS_LOGO_PATH.exists():
-        st.image(str(MOMS_LOGO_PATH), use_container_width=True)
-    else:
-        st.markdown("### 🍱 맘스락")
-
-with top2:
-    if DOSIRAK_PATH.exists():
-        st.image(str(DOSIRAK_PATH), use_container_width=True)
-    else:
-        st.markdown("**도시락 이미지:** `assets/dosirak.png`")
-
-with top3:
-    st.markdown("**供養偈 (공양게)**")
-    st.text(GONGYANG_TEXT)
-    if BOWL_PATH.exists():
-        st.image(str(BOWL_PATH), width=120)
-
-st.divider()
+st.markdown(
+    f"""
+<div class="gongyang-wrap">
+  <div class="gongyang-head">供養偈 (공양게)</div>
+  <div class="gongyang-text">{GONGYANG_TEXT}</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 # -----------------------------
-# ✅ 포스터 HTML (A4 1페이지 목표)
+# ✅ 예전 기능 복구: 탭 (달력 입력 / 포스터 / 업체전달)
+# -----------------------------
+tabs = st.tabs(["① 달력 입력", "② 포스터(HTML)", "③ 업체 전달용 출력(TXT)"])
+curr = date.today()
+
+
+# -----------------------------
+# 포스터(HTML) 생성
+# - 예전 요구: A4 1페이지 + 로고/그릇/공양게 + 월~금 달력
 # -----------------------------
 def build_poster_html(year: int, month: int) -> str:
     moms = _img_b64(MOMS_LOGO_PATH)
@@ -245,7 +256,7 @@ body {{ font-family: "Malgun Gothic", Arial, sans-serif; }}
 .bowl {{ height:52px; object-fit:contain; }}
 .gong {{
   white-space:pre-line;
-  font-weight:800;
+  font-weight:900;
   font-size:14px;
   line-height:1.45;
   color:#4a3627;
@@ -256,7 +267,7 @@ body {{ font-family: "Malgun Gothic", Arial, sans-serif; }}
 table{{ width:100%; border-collapse:collapse; table-layout:fixed; }}
 th,td{{ border:1px solid rgba(0,0,0,0.12); vertical-align:top; padding:6px; }}
 th{{ text-align:center; background:rgba(0,0,0,0.05); font-weight:900; }}
-td{{ height:92px; }} /* ✅ A4 1페이지 고정 핵심 */
+td{{ height:92px; }} /* ✅ A4 1페이지 고정 */
 
 .daynum{{ font-weight:900; margin-bottom:4px; }}
 .nd{{ color:#9b1c1c; font-weight:900; }}
@@ -283,9 +294,6 @@ td{{ height:92px; }} /* ✅ A4 1페이지 고정 핵심 */
 """
 
 
-# -----------------------------
-# ✅ 업체 전달용 TXT
-# -----------------------------
 def build_vendor_text(year: int, month: int) -> str:
     weeks = _month_weeks_mon_fri(year, month)
     no_list, ch_list = [], []
@@ -318,20 +326,15 @@ def build_vendor_text(year: int, month: int) -> str:
 
 
 # -----------------------------
-# 탭: 달력 / 포스터 / 출력파일  ✅ 복구
-# -----------------------------
-tabs = st.tabs(["① 달력 입력", "② 포스터(HTML)", "③ 출력파일(TXT)"])
-
-curr = date.today()
-
 # ① 달력 입력
+# -----------------------------
 with tabs[0]:
     c1, c2 = st.columns([1, 3], vertical_alignment="center")
     with c1:
         sel_year = st.selectbox("연도", [curr.year - 1, curr.year, curr.year + 1, curr.year + 2], index=1)
         sel_month = st.selectbox("월", list(range(1, 13)), index=curr.month - 1)
     with c2:
-        st.caption("✅ 1달만 / ✅ 월~금만 / ✅ 요일 표시 / 날짜 클릭 → 입력창")
+        st.caption("✅ 1달만 / ✅ 월~금만 / ✅ 요일 표시 / 날짜 클릭 → 입력")
 
     # 요일 헤더
     hcols = st.columns(5)
@@ -427,7 +430,10 @@ with tabs[0]:
                 if clicked and _is_weekday(d):
                     open_editor(d)
 
-# ② 포스터(HTML) ✅ 복구
+
+# -----------------------------
+# ② 포스터(HTML) + 다운로드
+# -----------------------------
 with tabs[1]:
     p_year = st.selectbox("연도(포스터)", [curr.year - 1, curr.year, curr.year + 1, curr.year + 2], index=1, key="p_year")
     p_month = st.selectbox("월(포스터)", list(range(1, 13)), index=curr.month - 1, key="p_month")
@@ -445,7 +451,10 @@ with tabs[1]:
         use_container_width=True,
     )
 
-# ③ 출력파일(TXT) ✅ 복구
+
+# -----------------------------
+# ③ 업체 전달용 출력(TXT) + 다운로드
+# -----------------------------
 with tabs[2]:
     o_year = st.selectbox("연도(출력)", [curr.year - 1, curr.year, curr.year + 1, curr.year + 2], index=1, key="o_year")
     o_month = st.selectbox("월(출력)", list(range(1, 13)), index=curr.month - 1, key="o_month")
