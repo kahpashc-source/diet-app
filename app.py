@@ -158,30 +158,7 @@ def build_day_maps(year: int, month: int, base_df: pd.DataFrame, chg_df: pd.Data
     return base_map, chg_map, del_map, del_exists
 
 # -----------------------------
-# 자동 백업
-# -----------------------------
-def make_autobackup_zip(reason: str = "auto") -> None:
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    zip_path = AUTO_BK_DIR / f"{ts}_{reason}.zip"
-    mem = io.BytesIO()
-    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in [BASE_MENU_PATH, CHANGE_MENU_PATH, DELIVERY_PATH, MENU_INDEX_PATH, HOLIDAYS_PATH]:
-            if p.exists():
-                zf.writestr(p.name, p.read_bytes())
-        for p in [MOMS_LOGO_PATH, KAPMA_LOGO_PATH, BOWL_PATH]:
-            if p.exists():
-                zf.writestr(f"assets/{p.name}", p.read_bytes())
-    zip_path.write_bytes(mem.getvalue())
-
-    zips = sorted(AUTO_BK_DIR.glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
-    for old in zips[30:]:
-        try:
-            old.unlink()
-        except Exception:
-            pass
-
-# -----------------------------
-# 공휴일
+# 공휴일(기본 시드)
 # -----------------------------
 def ensure_holidays_seed() -> None:
     ensure_csv(HOLIDAYS_PATH, ["date", "name", "auto_delivery_no"])
@@ -240,6 +217,42 @@ def auto_apply_holiday_delivery_no(year: int, month: int, holiday_map: dict[int,
         del_df = upsert_delivery(del_df, date(year, month, day), "Y")
         changed += 1
     return del_df, changed
+
+# -----------------------------
+# 요약문(업체용) 생성
+# -----------------------------
+def build_vendor_summary_text(year: int, month: int, base_map: dict[int, str], chg_map: dict[int, str], del_map: dict[int, bool]) -> str:
+    lines: list[str] = []
+    lines.append("동약협회입니다.")
+    lines.append(f"{year}년 {month:02d}월 도시락 변경/배달불요 내역입니다.")
+
+    # 배달불요
+    del_days = sorted([d for d, v in del_map.items() if v])
+    if del_days:
+        lines.append("🚫【배달불요】")
+        for d in del_days:
+            dow = KOR_DOW[date(year, month, d).weekday()]
+            lines.append(f"▶ {month:02d}/{d:02d}({dow}) : 배달불요")
+
+    # 변경메뉴(기본→변경 형식)
+    chg_days = sorted([d for d, v in chg_map.items() if norm_menu(v)])
+    if chg_days:
+        lines.append("🔁【변경메뉴】")
+        for d in chg_days:
+            dow = KOR_DOW[date(year, month, d).weekday()]
+            before = norm_menu(base_map.get(d, ""))
+            after = norm_menu(chg_map.get(d, ""))
+            if before and after and before != after:
+                lines.append(f"▶ {month:02d}/{d:02d}({dow}) : {before} → {after}")
+            elif after:
+                # 기본이 없거나 동일하면 변경만 표시
+                lines.append(f"▶ {month:02d}/{d:02d}({dow}) : {after}")
+
+    if (not del_days) and (not chg_days):
+        lines.append("※ 변경/배달불요 내역 없음")
+
+    lines.append("감사합니다.")
+    return "\n".join(lines)
 
 # -----------------------------
 # 데이터 초기화
@@ -303,7 +316,7 @@ with st.expander("로고/그림 설정(필요시)", expanded=False):
 gongyang = st.text_area("공양게(포스터/출력에 사용)", value=DEFAULT_GONGYANG, height=110)
 
 # -----------------------------
-# 공휴일 자동 반영 + 맵
+# 공휴일 + 맵
 # -----------------------------
 holiday_map = load_holidays_map_for_month(year, month)
 base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
@@ -314,195 +327,9 @@ if holiday_auto_count > 0:
     base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
 
 # -----------------------------
-# 3) 달력 + 입력 (요일 표시 + 자동 스크롤)
+# 4) 포스터(스크린샷용) 미리보기 / 파일 출력(A4 1페이지 최적화)
 # -----------------------------
-st.subheader("3) 달력(1개월) — 날짜 클릭 → 입력/저장")
-
-today = date.today()
-
-STYLE = """
-<style>
-  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;}
-  .cal-head{font-weight:900;opacity:0.85;text-align:center;padding:6px 0;}
-</style>
-"""
-st.markdown(STYLE, unsafe_allow_html=True)
-
-components.html(
-    '<div class="cal-grid">' + "".join([f'<div class="cal-head">{d}</div>' for d in KOR_DOW]) + "</div>",
-    height=34
-)
-
-if "selected_day" not in st.session_state:
-    st.session_state.selected_day = None
-if "confirm_delete" not in st.session_state:
-    st.session_state.confirm_delete = False
-
-cal = calendar.Calendar(firstweekday=0)
-weeks = cal.monthdayscalendar(year, month)
-
-def cell_kind(day: int) -> str:
-    if day <= 0: return "empty"
-    if del_map.get(day, False): return "delivery"
-    if chg_map.get(day): return "change"
-    if base_map.get(day): return "base"
-    return "none"
-
-def cell_css(kind: str, is_today: bool) -> str:
-    if kind == "delivery":
-        base = "background: rgba(255,0,0,0.10) !important; border:1px solid rgba(255,0,0,0.35) !important;"
-    elif kind == "change":
-        base = "background: rgba(255,180,0,0.12) !important; border:1px solid rgba(255,180,0,0.40) !important;"
-    elif kind == "base":
-        base = "background: rgba(0,0,0,0.03) !important; border:1px solid rgba(0,0,0,0.14) !important;"
-    else:
-        base = "background: rgba(255,255,255,0.92) !important; border:1px solid rgba(0,0,0,0.14) !important;"
-    if is_today:
-        base += " box-shadow: 0 0 0 2px rgba(0,120,255,0.55) inset !important;"
-    return base
-
-def cell_label(day: int) -> str:
-    if day <= 0: return ""
-    lines = [f"{day:02d}"]
-    if year == today.year and month == today.month and day == today.day:
-        lines.append("📌 TODAY")
-    if day in holiday_map:
-        lines.append(f"🎌 {holiday_map[day]}")
-    if del_map.get(day, False):
-        lines.append("🚫 배달불요")
-    if chg_map.get(day):
-        lines.append(f"🔶 변경: {chg_map[day]}")
-    if base_map.get(day):
-        lines.append(f"▫ 기본: {base_map[day]}")
-    return "\n".join(lines)
-
-for w in weeks:
-    cols = st.columns(7, gap="small")
-    for i, day in enumerate(w):
-        with cols[i]:
-            if day == 0:
-                st.markdown("<div style='height:112px;border-radius:14px;background:rgba(0,0,0,0.02);'></div>", unsafe_allow_html=True)
-            else:
-                kind = cell_kind(day)
-                is_today = (year == today.year and month == today.month and day == today.day)
-                key = f"day_{year}_{month}_{day}"
-                st.markdown(
-                    f"<style>div[data-testid='stButton'][data-key='{key}'] button{{{cell_css(kind, is_today)}}}</style>",
-                    unsafe_allow_html=True
-                )
-                if st.button(cell_label(day), key=key, use_container_width=True):
-                    st.session_state.selected_day = int(day)
-                    st.session_state.confirm_delete = False
-                    # ✅ 클릭 즉시 입력 영역으로 스크롤
-                    components.html(
-                        "<script>setTimeout(()=>{const el=document.getElementById('input_anchor'); if(el){el.scrollIntoView({behavior:'smooth',block:'start'});} }, 50);</script>",
-                        height=0
-                    )
-
-# 입력 영역 앵커
-st.markdown("<div id='input_anchor'></div>", unsafe_allow_html=True)
-
-sel = st.session_state.selected_day
-if sel is not None:
-    dsel = date(year, month, sel)
-    dow = KOR_DOW[dsel.weekday()]  # 월=0
-    is_holiday = sel in holiday_map
-
-    st.markdown("---")
-    st.markdown(f"### 📌 선택한 날짜: {dsel.strftime('%Y-%m-%d')}({dow})" + (f"  (🎌 {holiday_map[sel]})" if is_holiday else ""))
-
-    # ✅ 버튼을 위로 올려 동선 최소화
-    btn_row = st.columns(3)
-    # 아래 입력값들은 같은 키로 유지
-    index_options = idx_df["name"].tolist() if (not idx_df.empty and "name" in idx_df.columns) else []
-
-    # 기본값(배달불요)
-    default_del = del_map.get(sel, False) if (sel in del_exists) else (True if is_holiday else False)
-
-    # 버튼 동작은 입력칸 아래에서도 가능하지만, 먼저 버튼을 배치
-    # (저장은 실제로 눌렀을 때 아래의 현재 입력값을 읽어 처리)
-    # -> Streamlit 특성상 버튼이 먼저 있어도 상태값 읽기에 문제 없음
-
-    # 입력칸
-    cA, cB = st.columns(2, gap="medium")
-    with cA:
-        base_pick = st.selectbox("기본메뉴(인덱스 선택)", ["(선택안함)"] + index_options, index=0, key=f"base_pick_{dsel}")
-        base_text = st.text_input("기본메뉴(직접 입력)", value=base_map.get(sel, ""), key=f"base_text_{dsel}")
-    with cB:
-        chg_pick = st.selectbox("변경메뉴(인덱스 선택)", ["(선택안함)"] + index_options, index=0, key=f"chg_pick_{dsel}")
-        chg_text = st.text_input("변경메뉴(직접 입력)", value=chg_map.get(sel, ""), key=f"chg_text_{dsel}")
-
-    delivery_no = st.checkbox("🚫 배달불요(체크하면 배달불요)", value=default_del, key=f"del_{dsel}")
-
-    # 버튼 동작
-    with btn_row[0]:
-        if st.button("저장", use_container_width=True):
-            make_autobackup_zip("save")
-            base_v = base_text if base_pick == "(선택안함)" else base_pick
-            chg_v = chg_text if chg_pick == "(선택안함)" else chg_pick
-
-            base_df = upsert_date_value(base_df, "date", "base_menu", dsel, base_v)
-            chg_df = upsert_date_value(chg_df, "date", "change_menu", dsel, chg_v)
-            del_df = upsert_delivery(del_df, dsel, "Y" if delivery_no else "N")
-
-            save_df(base_df, BASE_MENU_PATH)
-            save_df(chg_df, CHANGE_MENU_PATH)
-            save_df(del_df, DELIVERY_PATH)
-
-            st.session_state.selected_day = None
-            st.session_state.confirm_delete = False
-            st.success("저장 완료 (자동 백업 생성됨)")
-            st.rerun()
-
-    with btn_row[1]:
-        if st.button("선택 취소", use_container_width=True):
-            st.session_state.selected_day = None
-            st.session_state.confirm_delete = False
-            st.rerun()
-
-    with btn_row[2]:
-        if not st.session_state.confirm_delete:
-            if st.button("해당일 내용 삭제", use_container_width=True):
-                st.session_state.confirm_delete = True
-                st.warning("정말 삭제하시겠습니까? 아래의 ‘삭제 확정’을 눌러주세요.")
-        else:
-            cdel1, cdel2 = st.columns(2)
-            with cdel1:
-                if st.button("🗑️ 삭제 확정", use_container_width=True):
-                    make_autobackup_zip("delete")
-                    dstr = dsel.isoformat()
-                    if not base_df.empty and "date" in base_df.columns:
-                        base_df = base_df[base_df["date"].astype(str) != dstr]
-                    if not chg_df.empty and "date" in chg_df.columns:
-                        chg_df = chg_df[chg_df["date"].astype(str) != dstr]
-                    if not del_df.empty and "date" in del_df.columns:
-                        del_df = del_df[del_df["date"].astype(str) != dstr]
-                    save_df(base_df, BASE_MENU_PATH)
-                    save_df(chg_df, CHANGE_MENU_PATH)
-                    save_df(del_df, DELIVERY_PATH)
-
-                    st.session_state.selected_day = None
-                    st.session_state.confirm_delete = False
-                    st.success("삭제 완료 (자동 백업 생성됨)")
-                    st.rerun()
-            with cdel2:
-                if st.button("취소", use_container_width=True):
-                    st.session_state.confirm_delete = False
-                    st.info("삭제를 취소했습니다.")
-
-st.divider()
-
-# -----------------------------
-# 4) 포스터 / 5) A4 출력
-# -----------------------------
-st.subheader("4) 포스터(스크린샷용) 미리보기 / 5) 업체 전달용 파일 출력(A4 1페이지 최적화)")
-
-# 최신 데이터 재로딩
-base_df = read_csv(BASE_MENU_PATH)
-chg_df = read_csv(CHANGE_MENU_PATH)
-del_df = read_csv(DELIVERY_PATH)
-base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
-holiday_map = load_holidays_map_for_month(year, month)
+st.subheader('4) "포스터(스크린샷용) 미리보기 / 파일 출력(A4 1페이지 최적화)"')
 
 moms_logo_b64 = b64_image(MOMS_LOGO_PATH)
 kapma_logo_b64 = b64_image(KAPMA_LOGO_PATH)
@@ -528,14 +355,14 @@ def make_calendar_table_html(year: int, month: int) -> str:
                 if del_map.get(day, False):
                     lines.append("<div class='tag tag-del'>🚫 배달불요</div>")
                 if chg_map.get(day):
-                    lines.append(f"<div class='tag tag-chg'>🔶 {safe_text(chg_map[day])}</div>")
+                    lines.append(f"<div class='tag tag-chg'>🔁 {safe_text(chg_map[day])}</div>")
                 if base_map.get(day):
                     lines.append(f"<div class='tag tag-base'>▫ {safe_text(base_map[day])}</div>")
                 tds.append(f"<td class='{cls}'>" + "".join(lines) + "</td>")
         rows.append("<tr>" + "".join(tds) + "</tr>")
     return "<table class='cal'>" + "".join(rows) + "</table>"
 
-def make_poster_html(a4: bool = False) -> str:
+def make_poster_html(a4: bool = False, include_summary: bool = False) -> str:
     moms_img = f"data:image/png;base64,{moms_logo_b64}" if moms_logo_b64 else ""
     kapma_img = f"data:image/png;base64,{kapma_logo_b64}" if kapma_logo_b64 else ""
     bowl_img = f"data:image/png;base64,{bowl_b64}" if bowl_b64 else ""
@@ -544,6 +371,14 @@ def make_poster_html(a4: bool = False) -> str:
     page_w = "210mm" if a4 else "100%"
     page_h = "297mm" if a4 else "auto"
     pad = "10mm" if a4 else "14px"
+
+    summary_text = build_vendor_summary_text(year, month, base_map, chg_map, del_map) if include_summary else ""
+    summary_html = f"""
+    <div class="summarybox">
+      <div class="summarytitle">업체 전달용 요약</div>
+      <pre class="summary">{safe_text(summary_text)}</pre>
+    </div>
+    """ if include_summary else ""
 
     return f"""
 <!doctype html>
@@ -558,33 +393,58 @@ def make_poster_html(a4: bool = False) -> str:
     font-family: "Apple SD Gothic Neo","Malgun Gothic","맑은 고딕","Noto Sans KR",sans-serif;
   }}
   .page {{ width:{page_w}; height:{page_h}; background:white; margin:0 auto; padding:{pad}; box-sizing:border-box; }}
+
   .top {{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6mm; }}
   .brand {{ display:flex; align-items:center; gap:10px; border:1px solid rgba(0,0,0,0.10); border-radius:14px; padding:8px 10px; }}
   .brand img {{ height:44px; width:auto; display:block; }}
   .brand .txt .b1 {{ font-weight:900; font-size:20px; }}
   .brand .txt .b2 {{ font-weight:800; font-size:14px; opacity:0.85; white-space:nowrap; }}
+
   .title {{ text-align:center; margin:2mm 0 5mm 0; line-height:1.08; }}
   .title .t1 {{ font-size:34px; font-weight:900; }}
   .title .t2 {{ font-size:18px; font-weight:800; opacity:0.9; }}
+
   .mid {{ display:flex; justify-content:center; align-items:center; margin:0 0 6mm 0; }}
   .midbox {{ width:100%; border:1px solid rgba(0,0,0,0.10); border-radius:16px; padding:10px 12px;
              display:flex; gap:14px; align-items:center; justify-content:center; }}
-  .midbox img {{ height:86px; width:auto; display:block; }}
-  .gong {{ white-space:pre-line; font-size:16px; font-weight:800; line-height:1.35; }}
-  table.cal {{ width:100%; border-collapse:separate; border-spacing:8px; table-layout:fixed; }}
-  table.cal th {{ font-size:14px; font-weight:900; padding:6px 0; opacity:0.85; text-align:center; }}
-  table.cal td {{ vertical-align:top; border:1px solid rgba(0,0,0,0.12); border-radius:14px; padding:8px 8px;
-                 height:{'26mm' if a4 else '110px'}; overflow:hidden; }}
+  .midbox img {{ height:80px; width:auto; display:block; }}
+  .gong {{ white-space:pre-line; font-size:15px; font-weight:800; line-height:1.35; }}
+
+  table.cal {{ width:100%; border-collapse:separate; border-spacing:7px; table-layout:fixed; }}
+  table.cal th {{ font-size:13px; font-weight:900; padding:6px 0; opacity:0.85; text-align:center; }}
+  table.cal td {{ vertical-align:top; border:1px solid rgba(0,0,0,0.12); border-radius:14px; padding:7px 7px;
+                 height:{'22mm' if a4 else '110px'}; overflow:hidden; }}
   td.empty {{ border:none; background:transparent; }}
   td.normal {{ background:white; }}
   td.change {{ background:rgba(255,180,0,0.10); border-color:rgba(255,180,0,0.35); }}
   td.delivery {{ background:rgba(255,0,0,0.08); border-color:rgba(255,0,0,0.35); }}
-  .d {{ font-weight:900; font-size:16px; margin-bottom:4px; }}
-  .tag {{ font-size:12px; font-weight:800; line-height:1.25; margin-top:2px; word-break:break-word; }}
+  .d {{ font-weight:900; font-size:15px; margin-bottom:3px; }}
+  .tag {{ font-size:11px; font-weight:800; line-height:1.25; margin-top:2px; word-break:break-word; }}
   .tag-hol {{ color:#0b4d7a; }}
   .tag-del {{ color:#b00020; }}
   .tag-chg {{ color:#7a4a00; }}
   .tag-base {{ color:#333; opacity:0.9; }}
+
+  .summarybox {{
+    margin-top:6mm;
+    border:1px solid rgba(0,0,0,0.12);
+    border-radius:14px;
+    padding:10px 12px;
+  }}
+  .summarytitle {{
+    font-weight:900;
+    font-size:14px;
+    margin-bottom:6px;
+    opacity:0.9;
+  }}
+  pre.summary {{
+    margin:0;
+    white-space:pre-wrap;
+    font-size:12.5px;
+    line-height:1.35;
+    font-weight:700;
+  }}
+
   .foot {{ margin-top:4mm; font-size:12px; opacity:0.75; display:flex; justify-content:space-between; }}
 </style>
 </head>
@@ -615,6 +475,8 @@ def make_poster_html(a4: bool = False) -> str:
 
     {cal_html}
 
+    {summary_html}
+
     <div class="foot">
       <div>※ 공휴일 🎌 / 변경·배달불요는 색으로 강조</div>
       <div>{year:04d}-{month:02d}</div>
@@ -624,17 +486,28 @@ def make_poster_html(a4: bool = False) -> str:
 </html>
 """
 
-poster_html = make_poster_html(a4=False)
+# 미리보기(요약 없이)
+poster_html = make_poster_html(a4=False, include_summary=False)
 components.html(poster_html, height=920, scrolling=True)
 
-# ✅ 파일명 형식: 동약협회 2026년 2월 식단 변경 내역.html
+# -----------------------------
+# 5) 업체전달용 파일 출력(요약 포함 A4)
+# -----------------------------
+st.subheader('5) "업체전달용 파일 출력"(A4 1페이지, 요약 삽입)')
+
+vendor_html = make_poster_html(a4=True, include_summary=True)
+
+# 파일명: 업체가 알아보기 쉽게
 download_name = f"동약협회 {year}년 {month}월 식단 변경 내역.html"
 
-a4_html = make_poster_html(a4=True)
 st.download_button(
-    "업체 전달용 HTML 다운로드(A4 1페이지 최적화)",
-    data=a4_html.encode("utf-8-sig"),
+    "업체전달용 HTML 다운로드(A4 1페이지 + 요약 포함)",
+    data=vendor_html.encode("utf-8-sig"),
     file_name=download_name,
     mime="text/html; charset=utf-8",
     use_container_width=True,
 )
+
+# 참고: 요약 텍스트도 화면에서 확인/복사 가능
+with st.expander("업체 전달용 요약(복사용)", expanded=False):
+    st.text_area("요약", value=build_vendor_summary_text(year, month, base_map, chg_map, del_map), height=220)
