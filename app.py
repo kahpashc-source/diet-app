@@ -12,6 +12,7 @@ import io
 import zipfile
 import re
 import unicodedata
+import time
 
 import pandas as pd
 import streamlit as st
@@ -29,16 +30,17 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR = APP_DIR / "assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
-CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
-DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
-MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
-HOLIDAYS_PATH = DATA_DIR / "holidays.csv"           # date,name,auto_delivery_no(Y/N)
+BASE_MENU_PATH = DATA_DIR / "base_menu.csv"
+CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"
+DELIVERY_PATH = DATA_DIR / "delivery.csv"
+MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"
+HOLIDAYS_PATH = DATA_DIR / "holidays.csv"
 
-# ✅ 연락처(동약협회)
+AUTO_BK_DIR = DATA_DIR / "autobackup"
+AUTO_BK_DIR.mkdir(parents=True, exist_ok=True)
+
 KAPMA_PHONE = "010-7101-5871"
 
-# ✅ 로고/이미지 파일명
 MOMS_LOGO_PATH = ASSETS_DIR / "moms_logo.png"
 KAPMA_LOGO_PATH = ASSETS_DIR / "kapma_logo.png"
 BOWL_PATH = ASSETS_DIR / "gongyang_bowl.png"
@@ -56,53 +58,28 @@ def ensure_csv(path: Path, cols: list[str]) -> None:
         pd.DataFrame(columns=cols).to_csv(path, index=False, encoding="utf-8-sig")
 
 def read_csv(path: Path) -> pd.DataFrame:
-    """
-    ✅ 핵심: keep_default_na=False + na_filter=False
-    - 빈칸이 NaN(float)로 바뀌는 문제를 차단
-    """
     if not path.exists():
         return pd.DataFrame()
     try:
-        return pd.read_csv(
-            path,
-            dtype=str,
-            encoding="utf-8-sig",
-            keep_default_na=False,
-            na_filter=False,
-        )
+        return pd.read_csv(path, dtype=str, encoding="utf-8-sig", keep_default_na=False, na_filter=False)
     except Exception:
-        return pd.read_csv(
-            path,
-            dtype=str,
-            encoding="utf-8",
-            keep_default_na=False,
-            na_filter=False,
-        )
+        return pd.read_csv(path, dtype=str, encoding="utf-8", keep_default_na=False, na_filter=False)
+
+def save_df(df: pd.DataFrame, path: Path) -> None:
+    df.to_csv(path, index=False, encoding="utf-8-sig")
 
 def norm_menu(x) -> str:
-    """
-    ✅ 핵심: 어떤 타입이 와도 안전하게 문자열로 처리
-    - NaN(float), None, 숫자 모두 대응
-    """
     if x is None:
         return ""
-    # pandas가 NaN을 줄 가능성까지 방어
     try:
         if pd.isna(x):
             return ""
     except Exception:
         pass
-
     s = str(x).strip()
     s = unicodedata.normalize("NFC", s)
     s = re.sub(r"\s+", " ", s)
-    # "nan" 문자열로 들어오는 최악 케이스 방지
     return "" if s.lower() == "nan" else s
-
-def b64_image(path: Path) -> str | None:
-    if not path.exists():
-        return None
-    return base64.b64encode(path.read_bytes()).decode("utf-8")
 
 def parse_date(s: str) -> date | None:
     try:
@@ -113,8 +90,10 @@ def parse_date(s: str) -> date | None:
 def safe_text(s: str) -> str:
     return html.escape(s or "")
 
-def save_df(df: pd.DataFrame, path: Path) -> None:
-    df.to_csv(path, index=False, encoding="utf-8-sig")
+def b64_image(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return base64.b64encode(path.read_bytes()).decode("utf-8")
 
 def upsert_date_value(df: pd.DataFrame, date_col: str, value_col: str, d: date, v: str) -> pd.DataFrame:
     dstr = d.isoformat()
@@ -176,6 +155,37 @@ def build_day_maps(year: int, month: int, base_df: pd.DataFrame, chg_df: pd.Data
                 del_map[d.day] = str(r.get("delivery", "N")).upper().startswith("Y")
 
     return base_map, chg_map, del_map, del_exists
+
+# -----------------------------
+# 자동 백업(저장/삭제 시 실행)
+# -----------------------------
+def make_autobackup_zip(reason: str = "auto") -> None:
+    """
+    저장/삭제 직전에 호출:
+    data/autobackup/yyyymmdd_HHMMSS_reason.zip 로 저장.
+    최근 30개만 유지.
+    """
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_path = AUTO_BK_DIR / f"{ts}_{reason}.zip"
+
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in [BASE_MENU_PATH, CHANGE_MENU_PATH, DELIVERY_PATH, MENU_INDEX_PATH, HOLIDAYS_PATH]:
+            if p.exists():
+                zf.writestr(p.name, p.read_bytes())
+        for p in [MOMS_LOGO_PATH, KAPMA_LOGO_PATH, BOWL_PATH]:
+            if p.exists():
+                zf.writestr(f"assets/{p.name}", p.read_bytes())
+
+    zip_path.write_bytes(mem.getvalue())
+
+    # 최근 30개만 유지
+    zips = sorted(AUTO_BK_DIR.glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
+    for old in zips[30:]:
+        try:
+            old.unlink()
+        except Exception:
+            pass
 
 # -----------------------------
 # 공휴일
@@ -302,6 +312,7 @@ with col_b2:
                 ]:
                     if fname in names:
                         path.write_bytes(zf.read(fname))
+
                 for asset_name, path in [
                     ("assets/moms_logo.png", MOMS_LOGO_PATH),
                     ("assets/kapma_logo.png", KAPMA_LOGO_PATH),
@@ -413,9 +424,11 @@ else:
 st.divider()
 
 # -----------------------------
-# 3) 달력(1개월)
+# 3) 달력(오늘 강조 + 색상)
 # -----------------------------
 st.subheader("3) 달력(1개월) — 날짜 클릭 → 입력/저장")
+
+today = date.today()
 
 STYLE = """
 <style>
@@ -428,6 +441,8 @@ components.html('<div class="cal-grid">' + "".join([f'<div class="cal-head">{d}<
 
 if "selected_day" not in st.session_state:
     st.session_state.selected_day = None
+if "confirm_delete" not in st.session_state:
+    st.session_state.confirm_delete = False
 
 cal = calendar.Calendar(firstweekday=0)
 weeks = cal.monthdayscalendar(year, month)
@@ -439,22 +454,34 @@ def cell_kind(day: int) -> str:
     if base_map.get(day): return "base"
     return "none"
 
-def cell_css(kind: str) -> str:
+def cell_css(kind: str, is_today: bool) -> str:
+    # 기본 색상
     if kind == "delivery":
-        return "background: rgba(255,0,0,0.10) !important; border:1px solid rgba(255,0,0,0.35) !important;"
-    if kind == "change":
-        return "background: rgba(255,180,0,0.12) !important; border:1px solid rgba(255,180,0,0.40) !important;"
-    if kind == "base":
-        return "background: rgba(0,0,0,0.03) !important;"
-    return "background: rgba(255,255,255,0.90) !important;"
+        base = "background: rgba(255,0,0,0.10) !important; border:1px solid rgba(255,0,0,0.35) !important;"
+    elif kind == "change":
+        base = "background: rgba(255,180,0,0.12) !important; border:1px solid rgba(255,180,0,0.40) !important;"
+    elif kind == "base":
+        base = "background: rgba(0,0,0,0.03) !important; border:1px solid rgba(0,0,0,0.14) !important;"
+    else:
+        base = "background: rgba(255,255,255,0.92) !important; border:1px solid rgba(0,0,0,0.14) !important;"
+    # ✅ 오늘 강조: 테두리 파란색 + 살짝 굵게
+    if is_today:
+        base += " box-shadow: 0 0 0 2px rgba(0,120,255,0.55) inset !important;"
+    return base
 
 def cell_label(day: int) -> str:
     if day <= 0: return ""
     lines = [f"{day:02d}"]
-    if day in holiday_map: lines.append(f"🎌 {holiday_map[day]}")
-    if del_map.get(day, False): lines.append("🚫 배달불요")
-    if chg_map.get(day): lines.append(f"🔶 변경: {chg_map[day]}")
-    if base_map.get(day): lines.append(f"▫ 기본: {base_map[day]}")
+    if year == today.year and month == today.month and day == today.day:
+        lines.append("📌 TODAY")
+    if day in holiday_map:
+        lines.append(f"🎌 {holiday_map[day]}")
+    if del_map.get(day, False):
+        lines.append("🚫 배달불요")
+    if chg_map.get(day):
+        lines.append(f"🔶 변경: {chg_map[day]}")
+    if base_map.get(day):
+        lines.append(f"▫ 기본: {base_map[day]}")
     return "\n".join(lines)
 
 for w in weeks:
@@ -465,11 +492,16 @@ for w in weeks:
                 st.markdown("<div style='height:112px;border-radius:14px;background:rgba(0,0,0,0.02);'></div>", unsafe_allow_html=True)
             else:
                 kind = cell_kind(day)
+                is_today = (year == today.year and month == today.month and day == today.day)
                 key = f"day_{year}_{month}_{day}"
-                st.markdown(f"<style>div[data-testid='stButton'][data-key='{key}'] button{{{cell_css(kind)}}}</style>", unsafe_allow_html=True)
+                st.markdown(f"<style>div[data-testid='stButton'][data-key='{key}'] button{{{cell_css(kind, is_today)}}}</style>", unsafe_allow_html=True)
                 if st.button(cell_label(day), key=key, use_container_width=True):
                     st.session_state.selected_day = int(day)
+                    st.session_state.confirm_delete = False  # 날짜 바뀌면 삭제확인 초기화
 
+# -----------------------------
+# 날짜 입력 UI + 저장 시 자동 백업 + 삭제 확인
+# -----------------------------
 sel = st.session_state.selected_day
 if sel is not None:
     dsel = date(year, month, sel)
@@ -493,12 +525,12 @@ if sel is not None:
         default_del = del_map.get(sel, False) if (sel in del_exists) else (True if is_holiday else False)
         delivery_no = st.checkbox("🚫 배달불요(체크하면 배달불요)", value=default_del, key=f"del_{dsel}")
 
-        if is_holiday and (sel not in del_exists) and (not delivery_no):
-            st.warning("공휴일인데 ‘배달불요’가 해제되어 있습니다. 필요 시 다시 확인하세요.")
-
         b1, b2, b3 = st.columns(3)
         with b1:
             if st.button("저장", use_container_width=True):
+                # ✅ 저장 직전 자동 백업
+                make_autobackup_zip("save")
+
                 base_v = base_text if base_pick == "(선택안함)" else base_pick
                 chg_v = chg_text if chg_pick == "(선택안함)" else chg_pick
 
@@ -511,29 +543,48 @@ if sel is not None:
                 save_df(del_df, DELIVERY_PATH)
 
                 st.session_state.selected_day = None
-                st.success("저장 완료")
+                st.session_state.confirm_delete = False
+                st.success("저장 완료 (자동 백업 생성됨)")
                 st.rerun()
 
         with b2:
             if st.button("선택 취소", use_container_width=True):
                 st.session_state.selected_day = None
+                st.session_state.confirm_delete = False
                 st.rerun()
 
         with b3:
-            if st.button("해당일 내용 삭제", use_container_width=True):
-                dstr = dsel.isoformat()
-                if not base_df.empty and "date" in base_df.columns:
-                    base_df = base_df[base_df["date"].astype(str) != dstr]
-                if not chg_df.empty and "date" in chg_df.columns:
-                    chg_df = chg_df[chg_df["date"].astype(str) != dstr]
-                if not del_df.empty and "date" in del_df.columns:
-                    del_df = del_df[del_df["date"].astype(str) != dstr]
-                save_df(base_df, BASE_MENU_PATH)
-                save_df(chg_df, CHANGE_MENU_PATH)
-                save_df(del_df, DELIVERY_PATH)
-                st.session_state.selected_day = None
-                st.success("삭제 완료")
-                st.rerun()
+            # ✅ 삭제 2단계 확인
+            if not st.session_state.confirm_delete:
+                if st.button("해당일 내용 삭제", use_container_width=True):
+                    st.session_state.confirm_delete = True
+                    st.warning("정말 삭제하시겠습니까? 아래에서 ‘삭제 확정’을 눌러주세요.")
+            else:
+                cdel1, cdel2 = st.columns(2)
+                with cdel1:
+                    if st.button("🗑️ 삭제 확정", use_container_width=True):
+                        make_autobackup_zip("delete")
+
+                        dstr = dsel.isoformat()
+                        if not base_df.empty and "date" in base_df.columns:
+                            base_df = base_df[base_df["date"].astype(str) != dstr]
+                        if not chg_df.empty and "date" in chg_df.columns:
+                            chg_df = chg_df[chg_df["date"].astype(str) != dstr]
+                        if not del_df.empty and "date" in del_df.columns:
+                            del_df = del_df[del_df["date"].astype(str) != dstr]
+
+                        save_df(base_df, BASE_MENU_PATH)
+                        save_df(chg_df, CHANGE_MENU_PATH)
+                        save_df(del_df, DELIVERY_PATH)
+
+                        st.session_state.selected_day = None
+                        st.session_state.confirm_delete = False
+                        st.success("삭제 완료 (자동 백업 생성됨)")
+                        st.rerun()
+                with cdel2:
+                    if st.button("취소", use_container_width=True):
+                        st.session_state.confirm_delete = False
+                        st.info("삭제를 취소했습니다.")
 
     with right:
         st.markdown("#### 빠른 확인")
@@ -542,6 +593,7 @@ if sel is not None:
         st.write("배달불요:", "예" if delivery_no else "아니오")
         if is_holiday:
             st.info(f"🎌 공휴일/기념일: {holiday_map[sel]}")
+        st.caption("저장/삭제 시 자동 백업은 data/autobackup/에 남습니다.")
 
 st.divider()
 
@@ -556,6 +608,10 @@ chg_df = read_csv(CHANGE_MENU_PATH)
 del_df = read_csv(DELIVERY_PATH)
 base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
 holiday_map = load_holidays_map_for_month(year, month)
+
+moms_logo_b64 = b64_image(MOMS_LOGO_PATH)
+kapma_logo_b64 = b64_image(KAPMA_LOGO_PATH)
+bowl_b64 = b64_image(BOWL_PATH)
 
 def make_calendar_table_html(year: int, month: int) -> str:
     cal = calendar.Calendar(firstweekday=0)
@@ -677,7 +733,6 @@ def make_poster_html(a4: bool = False) -> str:
 poster_html = make_poster_html(a4=False)
 components.html(poster_html, height=920, scrolling=True)
 
-# ✅ 파일 깨짐 방지: utf-8-sig(BOM)로 내려받기
 a4_html = make_poster_html(a4=True)
 st.download_button(
     "업체 전달용 HTML 다운로드(A4 1페이지 최적화)",
@@ -687,18 +742,13 @@ st.download_button(
     use_container_width=True,
 )
 
-with st.expander("포스터 파일이 깨져 보일 때", expanded=False):
-    st.markdown(
-        """
-- HTML은 **메모장/한글/워드가 아니라 크롬/엣지로 열어야 정상**입니다.
-- 크롬에서 열기: 파일을 크롬 창으로 **끌어다 놓기**
-- PDF 만들기: 크롬에서 연 뒤 **Ctrl+P → Microsoft Print to PDF**
-        """
-    )
-
 st.divider()
 
+# -----------------------------
+# 6) 업체 문자 전송용 텍스트 + 복사 버튼
+# -----------------------------
 st.subheader("6) 업체 문자 전송용 텍스트(복사해서 전송)")
+
 def build_message_text(year: int, month: int) -> str:
     lines = []
     lines.append("동약협회입니다.")
@@ -722,4 +772,36 @@ def build_message_text(year: int, month: int) -> str:
     lines.append(f"문의: {KAPMA_PHONE}")
     return "\n".join(lines)
 
-st.text_area("복사용", value=build_message_text(year, month), height=220)
+msg = build_message_text(year, month)
+
+cmsg1, cmsg2 = st.columns([3, 1])
+with cmsg1:
+    st.text_area("복사용", value=msg, height=220, key="msg_area")
+
+with cmsg2:
+    # ✅ JS로 클립보드 복사 (대부분 브라우저에서 동작)
+    copy_js = f"""
+    <script>
+    async function copyText() {{
+      try {{
+        await navigator.clipboard.writeText({msg!r});
+        const el = document.getElementById("copy_status");
+        if (el) el.innerText = "✅ 복사 완료";
+      }} catch (e) {{
+        const el = document.getElementById("copy_status");
+        if (el) el.innerText = "⚠️ 복사 실패(브라우저 제한)\\n텍스트 영역에서 직접 복사하세요.";
+      }}
+    }}
+    </script>
+    <button onclick="copyText()" style="
+      width:100%;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid rgba(0,0,0,0.18);
+      background:white;
+      font-weight:800;
+      cursor:pointer;
+    ">클립보드 복사</button>
+    <div id="copy_status" style="margin-top:10px;font-size:13px;opacity:0.85;white-space:pre-line;"></div>
+    """
+    components.html(copy_js, height=110)
