@@ -12,7 +12,6 @@ import io
 import zipfile
 import re
 import unicodedata
-import time
 
 import pandas as pd
 import streamlit as st
@@ -49,6 +48,8 @@ DEFAULT_GONGYANG = """이 음식이 어디에서 왔는가
 내 덕행으로는 받기가 부끄럽네
 마음의 온갖 탐욕을 떠나
 바른 생각으로 이 공양을 받습니다"""
+
+KOR_DOW = ["월", "화", "수", "목", "금", "토", "일"]
 
 # -----------------------------
 # 유틸
@@ -157,17 +158,11 @@ def build_day_maps(year: int, month: int, base_df: pd.DataFrame, chg_df: pd.Data
     return base_map, chg_map, del_map, del_exists
 
 # -----------------------------
-# 자동 백업(저장/삭제 시 실행)
+# 자동 백업
 # -----------------------------
 def make_autobackup_zip(reason: str = "auto") -> None:
-    """
-    저장/삭제 직전에 호출:
-    data/autobackup/yyyymmdd_HHMMSS_reason.zip 로 저장.
-    최근 30개만 유지.
-    """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_path = AUTO_BK_DIR / f"{ts}_{reason}.zip"
-
     mem = io.BytesIO()
     with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for p in [BASE_MENU_PATH, CHANGE_MENU_PATH, DELIVERY_PATH, MENU_INDEX_PATH, HOLIDAYS_PATH]:
@@ -176,10 +171,8 @@ def make_autobackup_zip(reason: str = "auto") -> None:
         for p in [MOMS_LOGO_PATH, KAPMA_LOGO_PATH, BOWL_PATH]:
             if p.exists():
                 zf.writestr(f"assets/{p.name}", p.read_bytes())
-
     zip_path.write_bytes(mem.getvalue())
 
-    # 최근 30개만 유지
     zips = sorted(AUTO_BK_DIR.glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
     for old in zips[30:]:
         try:
@@ -275,56 +268,6 @@ year = int(st.sidebar.number_input("연도", min_value=2020, max_value=2099, val
 month = int(st.sidebar.selectbox("월", list(range(1, 13)), index=int(t.month) - 1))
 people = int(st.sidebar.number_input("인원", min_value=1, max_value=50, value=1, step=1))
 
-st.sidebar.divider()
-st.sidebar.caption("데이터 백업/복원")
-col_b1, col_b2 = st.sidebar.columns(2)
-
-def make_backup_zip() -> bytes:
-    mem = io.BytesIO()
-    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in [BASE_MENU_PATH, CHANGE_MENU_PATH, DELIVERY_PATH, MENU_INDEX_PATH, HOLIDAYS_PATH]:
-            if p.exists():
-                zf.writestr(p.name, p.read_bytes())
-        for p in [MOMS_LOGO_PATH, KAPMA_LOGO_PATH, BOWL_PATH]:
-            if p.exists():
-                zf.writestr(f"assets/{p.name}", p.read_bytes())
-    mem.seek(0)
-    return mem.read()
-
-with col_b1:
-    st.download_button("ZIP 백업 다운로드", data=make_backup_zip(),
-                       file_name=f"moms_menu_backup_{year:04d}{month:02d}.zip",
-                       mime="application/zip", use_container_width=True)
-
-with col_b2:
-    up = st.file_uploader("ZIP 복원 업로드", type=["zip"], label_visibility="collapsed")
-    if up is not None:
-        try:
-            data = up.read()
-            with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
-                names = zf.namelist()
-                for fname, path in [
-                    ("base_menu.csv", BASE_MENU_PATH),
-                    ("change_menu.csv", CHANGE_MENU_PATH),
-                    ("delivery.csv", DELIVERY_PATH),
-                    ("menu_index.csv", MENU_INDEX_PATH),
-                    ("holidays.csv", HOLIDAYS_PATH),
-                ]:
-                    if fname in names:
-                        path.write_bytes(zf.read(fname))
-
-                for asset_name, path in [
-                    ("assets/moms_logo.png", MOMS_LOGO_PATH),
-                    ("assets/kapma_logo.png", KAPMA_LOGO_PATH),
-                    ("assets/gongyang_bowl.png", BOWL_PATH),
-                ]:
-                    if asset_name in names:
-                        path.write_bytes(zf.read(asset_name))
-            st.sidebar.success("복원 완료! 즉시 반영됩니다.")
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"복원 실패: {e}")
-
 # -----------------------------
 # 헤더
 # -----------------------------
@@ -358,32 +301,9 @@ with st.expander("로고/그림 설정(필요시)", expanded=False):
         BOWL_PATH.write_bytes(bowl_up.read()); st.success("그릇 그림 저장됨")
 
 gongyang = st.text_area("공양게(포스터/출력에 사용)", value=DEFAULT_GONGYANG, height=110)
-moms_logo_b64 = b64_image(MOMS_LOGO_PATH)
-kapma_logo_b64 = b64_image(KAPMA_LOGO_PATH)
-bowl_b64 = b64_image(BOWL_PATH)
 
 # -----------------------------
-# 1) 메뉴 인덱스
-# -----------------------------
-st.subheader("1) 메뉴 인덱스 관리(가나다/사전순 자동정렬)")
-cidx1, cidx2 = st.columns([2, 1])
-with cidx1:
-    new_item = st.text_input("새 메뉴 추가", placeholder="예) 소고기무국")
-with cidx2:
-    if st.button("인덱스에 추가", use_container_width=True):
-        v = norm_menu(new_item)
-        if v:
-            idx_df = pd.concat([idx_df, pd.DataFrame({"name": [v]})], ignore_index=True)
-            idx_df["name"] = idx_df["name"].astype(str).apply(norm_menu)
-            idx_df = idx_df[idx_df["name"].str.len() > 0].drop_duplicates().sort_values("name").reset_index(drop=True)
-            save_df(idx_df, MENU_INDEX_PATH)
-            st.success("추가 및 저장 완료")
-            st.rerun()
-st.dataframe(idx_df, use_container_width=True, height=180)
-st.divider()
-
-# -----------------------------
-# 공휴일 자동 반영
+# 공휴일 자동 반영 + 맵
 # -----------------------------
 holiday_map = load_holidays_map_for_month(year, month)
 base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
@@ -394,37 +314,7 @@ if holiday_auto_count > 0:
     base_map, chg_map, del_map, del_exists = build_day_maps(year, month, base_df, chg_df, del_df)
 
 # -----------------------------
-# 2) 월간 요약
-# -----------------------------
-st.subheader("2) 월간 요약(통계)")
-days_in_month = calendar.monthrange(year, month)[1]
-no_delivery_cnt = len([d for d, v in del_map.items() if v])
-delivery_cnt = days_in_month - no_delivery_cnt
-chg_cnt = len([d for d, v in chg_map.items() if v])
-
-menus = []
-for d in range(1, days_in_month + 1):
-    if base_map.get(d): menus.append(base_map[d])
-    if chg_map.get(d): menus.append(chg_map[d])
-
-top_menu_df = pd.Series(menus, dtype="object").value_counts().head(10).reset_index()
-top_menu_df.columns = ["메뉴", "횟수"]
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("총 일수", f"{days_in_month}일")
-m2.metric("배달일수", f"{delivery_cnt}일")
-m3.metric("배달불요", f"{no_delivery_cnt}일")
-m4.metric("변경메뉴 있는 날", f"{chg_cnt}일")
-
-if not top_menu_df.empty:
-    st.markdown("**가장 자주 등장한 메뉴 TOP 10**")
-    st.dataframe(top_menu_df, use_container_width=True, hide_index=True)
-else:
-    st.info("이번 달 메뉴 입력이 아직 없습니다.")
-st.divider()
-
-# -----------------------------
-# 3) 달력(오늘 강조 + 색상)
+# 3) 달력 + 입력 (요일 표시 + 자동 스크롤)
 # -----------------------------
 st.subheader("3) 달력(1개월) — 날짜 클릭 → 입력/저장")
 
@@ -437,7 +327,11 @@ STYLE = """
 </style>
 """
 st.markdown(STYLE, unsafe_allow_html=True)
-components.html('<div class="cal-grid">' + "".join([f'<div class="cal-head">{d}</div>' for d in ["월","화","수","목","금","토","일"]]) + "</div>", height=34)
+
+components.html(
+    '<div class="cal-grid">' + "".join([f'<div class="cal-head">{d}</div>' for d in KOR_DOW]) + "</div>",
+    height=34
+)
 
 if "selected_day" not in st.session_state:
     st.session_state.selected_day = None
@@ -455,7 +349,6 @@ def cell_kind(day: int) -> str:
     return "none"
 
 def cell_css(kind: str, is_today: bool) -> str:
-    # 기본 색상
     if kind == "delivery":
         base = "background: rgba(255,0,0,0.10) !important; border:1px solid rgba(255,0,0,0.35) !important;"
     elif kind == "change":
@@ -464,7 +357,6 @@ def cell_css(kind: str, is_today: bool) -> str:
         base = "background: rgba(0,0,0,0.03) !important; border:1px solid rgba(0,0,0,0.14) !important;"
     else:
         base = "background: rgba(255,255,255,0.92) !important; border:1px solid rgba(0,0,0,0.14) !important;"
-    # ✅ 오늘 강조: 테두리 파란색 + 살짝 굵게
     if is_today:
         base += " box-shadow: 0 0 0 2px rgba(0,120,255,0.55) inset !important;"
     return base
@@ -494,111 +386,114 @@ for w in weeks:
                 kind = cell_kind(day)
                 is_today = (year == today.year and month == today.month and day == today.day)
                 key = f"day_{year}_{month}_{day}"
-                st.markdown(f"<style>div[data-testid='stButton'][data-key='{key}'] button{{{cell_css(kind, is_today)}}}</style>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<style>div[data-testid='stButton'][data-key='{key}'] button{{{cell_css(kind, is_today)}}}</style>",
+                    unsafe_allow_html=True
+                )
                 if st.button(cell_label(day), key=key, use_container_width=True):
                     st.session_state.selected_day = int(day)
-                    st.session_state.confirm_delete = False  # 날짜 바뀌면 삭제확인 초기화
+                    st.session_state.confirm_delete = False
+                    # ✅ 클릭 즉시 입력 영역으로 스크롤
+                    components.html(
+                        "<script>setTimeout(()=>{const el=document.getElementById('input_anchor'); if(el){el.scrollIntoView({behavior:'smooth',block:'start'});} }, 50);</script>",
+                        height=0
+                    )
 
-# -----------------------------
-# 날짜 입력 UI + 저장 시 자동 백업 + 삭제 확인
-# -----------------------------
+# 입력 영역 앵커
+st.markdown("<div id='input_anchor'></div>", unsafe_allow_html=True)
+
 sel = st.session_state.selected_day
 if sel is not None:
     dsel = date(year, month, sel)
+    dow = KOR_DOW[dsel.weekday()]  # 월=0
     is_holiday = sel in holiday_map
 
     st.markdown("---")
-    st.markdown(f"### 📌 선택한 날짜: {dsel.strftime('%Y-%m-%d')}" + (f"  (🎌 {holiday_map[sel]})" if is_holiday else ""))
+    st.markdown(f"### 📌 선택한 날짜: {dsel.strftime('%Y-%m-%d')}({dow})" + (f"  (🎌 {holiday_map[sel]})" if is_holiday else ""))
 
+    # ✅ 버튼을 위로 올려 동선 최소화
+    btn_row = st.columns(3)
+    # 아래 입력값들은 같은 키로 유지
     index_options = idx_df["name"].tolist() if (not idx_df.empty and "name" in idx_df.columns) else []
-    left, right = st.columns([2, 1], gap="large")
 
-    with left:
-        cA, cB = st.columns(2, gap="medium")
-        with cA:
-            base_pick = st.selectbox("기본메뉴(인덱스 선택)", ["(선택안함)"] + index_options, index=0, key=f"base_pick_{dsel}")
-            base_text = st.text_input("기본메뉴(직접 입력)", value=base_map.get(sel, ""), key=f"base_text_{dsel}")
-        with cB:
-            chg_pick = st.selectbox("변경메뉴(인덱스 선택)", ["(선택안함)"] + index_options, index=0, key=f"chg_pick_{dsel}")
-            chg_text = st.text_input("변경메뉴(직접 입력)", value=chg_map.get(sel, ""), key=f"chg_text_{dsel}")
+    # 기본값(배달불요)
+    default_del = del_map.get(sel, False) if (sel in del_exists) else (True if is_holiday else False)
 
-        default_del = del_map.get(sel, False) if (sel in del_exists) else (True if is_holiday else False)
-        delivery_no = st.checkbox("🚫 배달불요(체크하면 배달불요)", value=default_del, key=f"del_{dsel}")
+    # 버튼 동작은 입력칸 아래에서도 가능하지만, 먼저 버튼을 배치
+    # (저장은 실제로 눌렀을 때 아래의 현재 입력값을 읽어 처리)
+    # -> Streamlit 특성상 버튼이 먼저 있어도 상태값 읽기에 문제 없음
 
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            if st.button("저장", use_container_width=True):
-                # ✅ 저장 직전 자동 백업
-                make_autobackup_zip("save")
+    # 입력칸
+    cA, cB = st.columns(2, gap="medium")
+    with cA:
+        base_pick = st.selectbox("기본메뉴(인덱스 선택)", ["(선택안함)"] + index_options, index=0, key=f"base_pick_{dsel}")
+        base_text = st.text_input("기본메뉴(직접 입력)", value=base_map.get(sel, ""), key=f"base_text_{dsel}")
+    with cB:
+        chg_pick = st.selectbox("변경메뉴(인덱스 선택)", ["(선택안함)"] + index_options, index=0, key=f"chg_pick_{dsel}")
+        chg_text = st.text_input("변경메뉴(직접 입력)", value=chg_map.get(sel, ""), key=f"chg_text_{dsel}")
 
-                base_v = base_text if base_pick == "(선택안함)" else base_pick
-                chg_v = chg_text if chg_pick == "(선택안함)" else chg_pick
+    delivery_no = st.checkbox("🚫 배달불요(체크하면 배달불요)", value=default_del, key=f"del_{dsel}")
 
-                base_df = upsert_date_value(base_df, "date", "base_menu", dsel, base_v)
-                chg_df = upsert_date_value(chg_df, "date", "change_menu", dsel, chg_v)
-                del_df = upsert_delivery(del_df, dsel, "Y" if delivery_no else "N")
+    # 버튼 동작
+    with btn_row[0]:
+        if st.button("저장", use_container_width=True):
+            make_autobackup_zip("save")
+            base_v = base_text if base_pick == "(선택안함)" else base_pick
+            chg_v = chg_text if chg_pick == "(선택안함)" else chg_pick
 
-                save_df(base_df, BASE_MENU_PATH)
-                save_df(chg_df, CHANGE_MENU_PATH)
-                save_df(del_df, DELIVERY_PATH)
+            base_df = upsert_date_value(base_df, "date", "base_menu", dsel, base_v)
+            chg_df = upsert_date_value(chg_df, "date", "change_menu", dsel, chg_v)
+            del_df = upsert_delivery(del_df, dsel, "Y" if delivery_no else "N")
 
-                st.session_state.selected_day = None
-                st.session_state.confirm_delete = False
-                st.success("저장 완료 (자동 백업 생성됨)")
-                st.rerun()
+            save_df(base_df, BASE_MENU_PATH)
+            save_df(chg_df, CHANGE_MENU_PATH)
+            save_df(del_df, DELIVERY_PATH)
 
-        with b2:
-            if st.button("선택 취소", use_container_width=True):
-                st.session_state.selected_day = None
-                st.session_state.confirm_delete = False
-                st.rerun()
+            st.session_state.selected_day = None
+            st.session_state.confirm_delete = False
+            st.success("저장 완료 (자동 백업 생성됨)")
+            st.rerun()
 
-        with b3:
-            # ✅ 삭제 2단계 확인
-            if not st.session_state.confirm_delete:
-                if st.button("해당일 내용 삭제", use_container_width=True):
-                    st.session_state.confirm_delete = True
-                    st.warning("정말 삭제하시겠습니까? 아래에서 ‘삭제 확정’을 눌러주세요.")
-            else:
-                cdel1, cdel2 = st.columns(2)
-                with cdel1:
-                    if st.button("🗑️ 삭제 확정", use_container_width=True):
-                        make_autobackup_zip("delete")
+    with btn_row[1]:
+        if st.button("선택 취소", use_container_width=True):
+            st.session_state.selected_day = None
+            st.session_state.confirm_delete = False
+            st.rerun()
 
-                        dstr = dsel.isoformat()
-                        if not base_df.empty and "date" in base_df.columns:
-                            base_df = base_df[base_df["date"].astype(str) != dstr]
-                        if not chg_df.empty and "date" in chg_df.columns:
-                            chg_df = chg_df[chg_df["date"].astype(str) != dstr]
-                        if not del_df.empty and "date" in del_df.columns:
-                            del_df = del_df[del_df["date"].astype(str) != dstr]
+    with btn_row[2]:
+        if not st.session_state.confirm_delete:
+            if st.button("해당일 내용 삭제", use_container_width=True):
+                st.session_state.confirm_delete = True
+                st.warning("정말 삭제하시겠습니까? 아래의 ‘삭제 확정’을 눌러주세요.")
+        else:
+            cdel1, cdel2 = st.columns(2)
+            with cdel1:
+                if st.button("🗑️ 삭제 확정", use_container_width=True):
+                    make_autobackup_zip("delete")
+                    dstr = dsel.isoformat()
+                    if not base_df.empty and "date" in base_df.columns:
+                        base_df = base_df[base_df["date"].astype(str) != dstr]
+                    if not chg_df.empty and "date" in chg_df.columns:
+                        chg_df = chg_df[chg_df["date"].astype(str) != dstr]
+                    if not del_df.empty and "date" in del_df.columns:
+                        del_df = del_df[del_df["date"].astype(str) != dstr]
+                    save_df(base_df, BASE_MENU_PATH)
+                    save_df(chg_df, CHANGE_MENU_PATH)
+                    save_df(del_df, DELIVERY_PATH)
 
-                        save_df(base_df, BASE_MENU_PATH)
-                        save_df(chg_df, CHANGE_MENU_PATH)
-                        save_df(del_df, DELIVERY_PATH)
-
-                        st.session_state.selected_day = None
-                        st.session_state.confirm_delete = False
-                        st.success("삭제 완료 (자동 백업 생성됨)")
-                        st.rerun()
-                with cdel2:
-                    if st.button("취소", use_container_width=True):
-                        st.session_state.confirm_delete = False
-                        st.info("삭제를 취소했습니다.")
-
-    with right:
-        st.markdown("#### 빠른 확인")
-        st.write("기본:", base_map.get(sel, ""))
-        st.write("변경:", chg_map.get(sel, ""))
-        st.write("배달불요:", "예" if delivery_no else "아니오")
-        if is_holiday:
-            st.info(f"🎌 공휴일/기념일: {holiday_map[sel]}")
-        st.caption("저장/삭제 시 자동 백업은 data/autobackup/에 남습니다.")
+                    st.session_state.selected_day = None
+                    st.session_state.confirm_delete = False
+                    st.success("삭제 완료 (자동 백업 생성됨)")
+                    st.rerun()
+            with cdel2:
+                if st.button("취소", use_container_width=True):
+                    st.session_state.confirm_delete = False
+                    st.info("삭제를 취소했습니다.")
 
 st.divider()
 
 # -----------------------------
-# 포스터 + A4 HTML 다운로드(깨짐 방지)
+# 4) 포스터 / 5) A4 출력
 # -----------------------------
 st.subheader("4) 포스터(스크린샷용) 미리보기 / 5) 업체 전달용 파일 출력(A4 1페이지 최적화)")
 
@@ -617,7 +512,7 @@ def make_calendar_table_html(year: int, month: int) -> str:
     cal = calendar.Calendar(firstweekday=0)
     weeks = cal.monthdayscalendar(year, month)
     rows = []
-    rows.append("<tr>" + "".join([f"<th>{d}</th>" for d in ["월","화","수","목","금","토","일"]]) + "</tr>")
+    rows.append("<tr>" + "".join([f"<th>{d}</th>" for d in KOR_DOW]) + "</tr>")
     for w in weeks:
         tds = []
         for day in w:
@@ -627,7 +522,6 @@ def make_calendar_table_html(year: int, month: int) -> str:
                 if del_map.get(day, False): cls = "delivery"
                 elif chg_map.get(day): cls = "change"
                 else: cls = "normal"
-
                 lines = [f"<div class='d'>{day:02d}</div>"]
                 if day in holiday_map:
                     lines.append(f"<div class='tag tag-hol'>🎌 {safe_text(holiday_map[day])}</div>")
@@ -645,8 +539,8 @@ def make_poster_html(a4: bool = False) -> str:
     moms_img = f"data:image/png;base64,{moms_logo_b64}" if moms_logo_b64 else ""
     kapma_img = f"data:image/png;base64,{kapma_logo_b64}" if kapma_logo_b64 else ""
     bowl_img = f"data:image/png;base64,{bowl_b64}" if bowl_b64 else ""
-    cal_html = make_calendar_table_html(year, month)
 
+    cal_html = make_calendar_table_html(year, month)
     page_w = "210mm" if a4 else "100%"
     page_h = "297mm" if a4 else "auto"
     pad = "10mm" if a4 else "14px"
@@ -733,75 +627,14 @@ def make_poster_html(a4: bool = False) -> str:
 poster_html = make_poster_html(a4=False)
 components.html(poster_html, height=920, scrolling=True)
 
+# ✅ 파일명 형식: 동약협회 2026년 2월 식단 변경 내역.html
+download_name = f"동약협회 {year}년 {month}월 식단 변경 내역.html"
+
 a4_html = make_poster_html(a4=True)
 st.download_button(
     "업체 전달용 HTML 다운로드(A4 1페이지 최적화)",
     data=a4_html.encode("utf-8-sig"),
-    file_name=f"맘스락_{year:04d}{month:02d}_식단변경_A4.html",
+    file_name=download_name,
     mime="text/html; charset=utf-8",
     use_container_width=True,
 )
-
-st.divider()
-
-# -----------------------------
-# 6) 업체 문자 전송용 텍스트 + 복사 버튼
-# -----------------------------
-st.subheader("6) 업체 문자 전송용 텍스트(복사해서 전송)")
-
-def build_message_text(year: int, month: int) -> str:
-    lines = []
-    lines.append("동약협회입니다.")
-    lines.append(f"{year}년 {month:02d}월 도시락 변경/배달불요 내역입니다.")
-
-    del_days = sorted([d for d, v in del_map.items() if v])
-    if del_days:
-        lines.append("🚫【배달불요】")
-        for d in del_days:
-            lines.append(f"▶ {month:02d}/{d:02d} : 배달불요")
-
-    chg_days = sorted([d for d, v in chg_map.items() if v])
-    if chg_days:
-        lines.append("🔶【변경메뉴】")
-        for d in chg_days:
-            lines.append(f"▶ {month:02d}/{d:02d} : {chg_map[d]}")
-
-    if not del_days and not chg_days:
-        lines.append("※ 변경/배달불요 내역 없음")
-
-    lines.append(f"문의: {KAPMA_PHONE}")
-    return "\n".join(lines)
-
-msg = build_message_text(year, month)
-
-cmsg1, cmsg2 = st.columns([3, 1])
-with cmsg1:
-    st.text_area("복사용", value=msg, height=220, key="msg_area")
-
-with cmsg2:
-    # ✅ JS로 클립보드 복사 (대부분 브라우저에서 동작)
-    copy_js = f"""
-    <script>
-    async function copyText() {{
-      try {{
-        await navigator.clipboard.writeText({msg!r});
-        const el = document.getElementById("copy_status");
-        if (el) el.innerText = "✅ 복사 완료";
-      }} catch (e) {{
-        const el = document.getElementById("copy_status");
-        if (el) el.innerText = "⚠️ 복사 실패(브라우저 제한)\\n텍스트 영역에서 직접 복사하세요.";
-      }}
-    }}
-    </script>
-    <button onclick="copyText()" style="
-      width:100%;
-      padding:10px 12px;
-      border-radius:12px;
-      border:1px solid rgba(0,0,0,0.18);
-      background:white;
-      font-weight:800;
-      cursor:pointer;
-    ">클립보드 복사</button>
-    <div id="copy_status" style="margin-top:10px;font-size:13px;opacity:0.85;white-space:pre-line;"></div>
-    """
-    components.html(copy_js, height=110)
