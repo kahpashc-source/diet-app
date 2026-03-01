@@ -8,7 +8,6 @@ from datetime import date, datetime
 import calendar
 import base64
 import re
-import urllib.request
 import pandas as pd
 import streamlit as st
 
@@ -21,26 +20,16 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-ASSETS_DIR = APP_DIR / "assets"
-ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-
 BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
 CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N) -> Y:배달, N:배달불요
 MENU_INDEX_PATH = DATA_DIR / "menu_index.csv"       # name
 
-# -----------------------------
-# GitHub Raw URL (선택)
-# -----------------------------
-# ✅ 여기에 "raw.githubusercontent.com/..." 형태로 넣으면 즉시 적용됩니다.
-# 비어 있으면 assets 폴더(로컬) 파일을 사용합니다.
-MOMS_LOGO_URL = ""   # 예: https://raw.githubusercontent.com/<user>/<repo>/main/assets/moms_logo.png
-KAPMA_LOGO_URL = ""  # 예: https://raw.githubusercontent.com/<user>/<repo>/main/assets/kapma_logo.png
-BOWL_IMG_URL = ""    # 예: https://raw.githubusercontent.com/<user>/<repo>/main/assets/gongyang_bowl.png
-
-MOMS_LOGO_LOCAL = ASSETS_DIR / "moms_logo.png"
-KAPMA_LOGO_LOCAL = ASSETS_DIR / "kapma_logo.png"
-BOWL_IMG_LOCAL = ASSETS_DIR / "gongyang_bowl.png"
+# ✅ GitHub 저장소에 이미 있는 파일명 그대로 사용(루트 기준)
+# (정확도: 매우 높음) — 스샷에 보이는 파일 리스트와 동일
+MOMS_LOGO = APP_DIR / "moms_logo.png"
+ASSOC_LOGO = APP_DIR / "association_logo.png"
+BOWL_IMG = APP_DIR / "gongyang_bowl.png"
 
 GONGYANG_VERSE = """이 음식이 어디에서 왔는가
 내 덕행으로는 받기가 부끄럽네
@@ -99,41 +88,13 @@ def _is_weekday(d: date) -> bool:
     return d.weekday() < 5
 
 
-@st.cache_data(show_spinner=False)
-def _fetch_bytes(url: str) -> bytes | None:
-    if not url:
-        return None
-    try:
-        with urllib.request.urlopen(url, timeout=10) as r:
-            return r.read()
-    except Exception:
-        return None
-
-
-def _img_b64_tag_from_bytes(data: bytes | None, height_px: int) -> str:
-    if not data:
-        return ""
-    b64 = base64.b64encode(data).decode("utf-8")
-    return f'<img src="data:image/png;base64,{b64}" style="height:{height_px}px; width:auto; object-fit:contain;" />'
-
-
-def _img_b64_tag_from_local(path: Path, height_px: int) -> str:
+def _img_b64_tag(path: Path, height_px: int) -> str:
     if not path.exists():
         return ""
-    return _img_b64_tag_from_bytes(path.read_bytes(), height_px)
-
-
-def get_logo_tag(kind: str, height_px: int) -> str:
-    if kind == "moms":
-        data = _fetch_bytes(MOMS_LOGO_URL)
-        return _img_b64_tag_from_bytes(data, height_px) if data else _img_b64_tag_from_local(MOMS_LOGO_LOCAL, height_px)
-    if kind == "kapma":
-        data = _fetch_bytes(KAPMA_LOGO_URL)
-        return _img_b64_tag_from_bytes(data, height_px) if data else _img_b64_tag_from_local(KAPMA_LOGO_LOCAL, height_px)
-    if kind == "bowl":
-        data = _fetch_bytes(BOWL_IMG_URL)
-        return _img_b64_tag_from_bytes(data, height_px) if data else _img_b64_tag_from_local(BOWL_IMG_LOCAL, height_px)
-    return ""
+    data = path.read_bytes()
+    b64 = base64.b64encode(data).decode("utf-8")
+    # png로 가정(현재 파일이 png)
+    return f'<img src="data:image/png;base64,{b64}" style="height:{height_px}px; width:auto; object-fit:contain;" />'
 
 
 # -----------------------------
@@ -144,10 +105,13 @@ chg_df = _safe_read_csv(CHANGE_MENU_PATH, ["date", "change_menu"])
 del_df = _safe_read_csv(DELIVERY_PATH, ["date", "delivery"])
 idx_df = _safe_read_csv(MENU_INDEX_PATH, ["name"])
 
+# 인덱스 가나다 정렬
 if not idx_df.empty:
     idx_df["name"] = idx_df["name"].astype(str).str.strip()
     idx_df = idx_df[idx_df["name"] != ""].drop_duplicates().sort_values("name")
     _save_csv(idx_df, MENU_INDEX_PATH)
+
+index_options = ["(직접입력)"] + (idx_df["name"].tolist() if not idx_df.empty else [])
 
 
 def get_base(d: date) -> str:
@@ -212,56 +176,12 @@ def add_index_menu(name: str) -> None:
     _save_csv(idx_df, MENU_INDEX_PATH)
 
 
-index_options = ["(직접입력)"] + (idx_df["name"].tolist() if not idx_df.empty else [])
-
-
 # -----------------------------
-# CSS (초기화면/달력)
+# UI: 상단(간단히)
 # -----------------------------
 st.markdown(
     """
     <style>
-      .hero{
-        border-radius:18px;
-        padding:20px 18px 16px 18px;
-        background: #ffffff;
-        border: 1px solid rgba(0,0,0,0.08);
-      }
-      .hero-top{
-        display:flex;
-        align-items:center;
-        justify-content:space-between;
-        gap:12px;
-      }
-      .hero-title{
-        font-size:30px;
-        font-weight:900;
-        line-height:1.12;
-        margin:0;
-      }
-      .hero-sub{
-        font-size:14px;
-        opacity:0.75;
-        margin-top:4px;
-        font-weight:700;
-      }
-      .hero-mid{
-        display:flex;
-        justify-content:center;
-        margin:10px 0 8px 0;
-      }
-      .verse{
-        border-radius:16px;
-        padding:16px 18px;
-        background: #fffaf2;
-        border: 2px solid rgba(177, 127, 69, 0.35);
-        white-space: pre-line;
-        font-size:18px;
-        font-weight:900;
-        line-height:1.55;
-      }
-
-      /* 달력 버튼 */
       .calbtn button{
         width:100% !important;
         text-align:left !important;
@@ -271,53 +191,15 @@ st.markdown(
         white-space:pre-line !important;
         border: 1px solid rgba(0,0,0,0.14) !important;
       }
-
-      /* 달력의 "불필요한 빈칸(네모박스)"은 버튼 자체를 만들지 않음 */
-      .blank-cell{
-        height:112px;
-        border-radius:14px;
-        background: transparent;
-      }
+      .blank-cell{ height:112px; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-
-# -----------------------------
-# 1. 초기화면(디자인 개선)
-# -----------------------------
-moms_tag = get_logo_tag("moms", 52) or '<div style="font-size:12px;opacity:0.7;">MOMS 로고</div>'
-kapma_tag = get_logo_tag("kapma", 52) or '<div style="font-size:12px;opacity:0.7;">동약협회 로고</div>'
-bowl_tag = get_logo_tag("bowl", 54) or '<div style="font-size:12px;opacity:0.7;">공양그릇</div>'
-
-st.markdown('<div class="hero">', unsafe_allow_html=True)
-st.markdown(
-    f"""
-    <div class="hero-top">
-      <div style="display:flex; align-items:center; gap:12px;">
-        <div style="min-width:64px;">{moms_tag}</div>
-        <div>
-          <div class="hero-title">맘스락 식단 변경 관리</div>
-          <div class="hero-sub">달력 클릭 → 저장 → 업체 제출용 A4 출력</div>
-        </div>
-      </div>
-      <div style="min-width:64px; display:flex; justify-content:flex-end;">{kapma_tag}</div>
-    </div>
-    <div class="hero-mid">{bowl_tag}</div>
-    <div class="verse">{GONGYANG_VERSE}</div>
-    """,
-    unsafe_allow_html=True,
-)
-st.markdown("</div>", unsafe_allow_html=True)
-
-st.divider()
-
-# -----------------------------
 # 월 선택
-# -----------------------------
 today = date.today()
-colA, colB, colC = st.columns([1.1, 1.0, 1.5])
+colA, colB, colC = st.columns([1.1, 1.0, 1.6])
 with colA:
     year = st.number_input("연도", min_value=2020, max_value=2100, value=today.year, step=1)
 with colB:
@@ -328,9 +210,7 @@ with colC:
 year = int(year)
 month = int(month)
 
-# -----------------------------
-# 메뉴 인덱스(필요하면 사용)
-# -----------------------------
+# 메뉴 인덱스(필요시만)
 with st.expander("메뉴 인덱스 (가나다 순)", expanded=False):
     l, r = st.columns([1.1, 1.0])
     with l:
@@ -348,11 +228,9 @@ with st.expander("메뉴 인덱스 (가나다 순)", expanded=False):
 st.divider()
 
 # -----------------------------
-# 2. 데이터 입력 달력
-# - 기본메뉴가 먼저
-# - 변경메뉴가 있으면 아래에 '확실히' 표시
-# - 배달불요는 최상단 경고 + 칸 색상 변화
-# - "요일 줄 밑의 불필요한 네모 박스" 제거: 월 외 날짜는 버튼 생성 자체를 하지 않음
+# 달력(월~금) + 날짜 클릭 입력
+# - 표시 규칙: 기본메뉴 먼저, 변경메뉴는 아래(강조), 배달불요는 최상단 경고
+# - 월 외 날짜는 버튼을 만들지 않아 “불필요한 네모박스”가 생기지 않게 처리
 # -----------------------------
 st.markdown("## 날짜 입력 (월~금)")
 
@@ -383,29 +261,19 @@ def cell_label(d: date) -> str:
     deliv = get_delivery_flag(d)
 
     lines = [f"{d.day:02d}({_dow_kr(d.weekday())})"]
-
-    # 배달불요는 가장 위에 (확실)
     if deliv == "N":
         lines.append("🟥 배달불요")
-
-    # ✅ 기본 먼저
     if base:
         lines.append(f"⬜ 기본: {base}")
-
-    # ✅ 변경은 아래 (확실히 구분)
     if chg:
         lines.append(f"🟨 변경: {chg}")
-
     return "\n".join(lines)
 
 
 def cell_kind(d: date) -> str:
-    # 배경색 선택용
-    chg = get_change(d)
-    deliv = get_delivery_flag(d)
-    if deliv == "N":
+    if get_delivery_flag(d) == "N":
         return "no_delivery"
-    if chg:
+    if get_change(d):
         return "changed"
     return "normal"
 
@@ -422,13 +290,11 @@ for w in weeks:
     for i in range(5):
         d = w[i]  # Mon..Fri
         with row[i]:
-            # 월 외 날짜/빈칸은 "버튼 생성 자체를 안 함" -> 불필요한 네모박스 제거
             if d.month != month:
                 st.markdown('<div class="blank-cell"></div>', unsafe_allow_html=True)
                 continue
 
             k = cell_kind(d)
-            # 색감: 배달불요(연한빨강), 변경(연한노랑), 기본(흰)
             if k == "no_delivery":
                 st.markdown(
                     "<style>.stButton > button{background: rgba(255,0,0,0.06) !important; border-color: rgba(255,0,0,0.35) !important;}</style>",
@@ -513,57 +379,204 @@ except Exception:
 st.divider()
 
 # -----------------------------
-# 4. 업체 제출용 A4 출력만 제작 (불필요한 글씨 배제)
-# - 제목 / 협회(전화) / 공양게 / 달력(메뉴표시) / 변경&배달불요 리스트
-# - 안내문/불필요한 캡션/설명 제거
+# 포스터: 업로드한 형식(가장 마음에 든 스타일)로 고정
+# - 좌/우 로고 박스, 중앙 제목(2줄)
+# - 월~금 달력 박스
+# - 변경: 노란 테두리 + 빨간 글씨 + '변경' 배지
+# - 배달불요: 붉은 테두리 + '배달불요' 배지
+# - 월 외 빈칸: 점선 박스
 # -----------------------------
-st.markdown("## 업체 제출용 A4 출력 (달력 + 리스트 1페이지)")
+st.markdown("## 포스터 미리보기 (업로드한 형식 고정)")
 
-# A4 HTML
-def vendor_a4_html(year: int, month: int) -> str:
-    title = f"{output_filename(year, month)}"
+def poster_html(year: int, month: int) -> str:
+    moms = _img_b64_tag(MOMS_LOGO, 56) or "<div style='font-weight:900;'>MOMS</div>"
+    assoc = _img_b64_tag(ASSOC_LOGO, 56) or "<div style='font-weight:900;'>동약협회</div>"
 
-    kap = get_logo_tag("kapma", 46) or ""
-    mom = get_logo_tag("moms", 46) or ""
-    bowl = get_logo_tag("bowl", 52) or ""
+    title = f"맘스락 {month:02d}월<br/>식단 변경"
 
-    # 달력(월~금) rows
-    rows = []
+    # 달력 셀 생성(월~금)
+    # 바깥달: 점선 빈칸
+    cells_html = []
     for w in weeks:
-        tds = []
         for i in range(5):
             d = w[i]
             if d.month != month:
-                tds.append('<td class="cell out"></td>')
+                cells_html.append("<div class='cell empty'></div>")
                 continue
 
             base = get_base(d)
             chg = get_change(d)
             deliv = get_delivery_flag(d)
 
-            bg = "#ffffff"
-            border = "rgba(0,0,0,0.14)"
+            cls = "cell"
+            badge = ""
+            sub = ""
+
+            # 배달불요 우선
             if deliv == "N":
-                bg = "#ffe6e6"
-                border = "rgba(255,0,0,0.35)"
+                cls += " no"
+                badge = "<span class='pill pill-no'>배달불요</span>"
+
+            # 변경이 있으면 변경 스타일로(배달불요와 동시일 때도 변경은 표시만 추가)
             if chg:
-                bg = "#fff2c2"
-                border = "rgba(255,170,0,0.45)"
+                cls += " chg"
+                sub = f"<div class='chgline'><span class='pill pill-chg'>변경</span><span class='chgtext'>{chg}</span></div>"
 
-            blocks = [f'<div class="day">{d.day:02d}({_dow_kr(d.weekday())})</div>']
+            dayline = f"<div class='dayline'><span class='daynum'>{d.day:02d}</span><span class='dow'>({_dow_kr(d.weekday())})</span>{badge}</div>"
+            base_line = f"<div class='base'>{base}</div>" if base else "<div class='base muted'></div>"
 
-            # ✅ 배달불요 / 기본 / 변경 (구분 블록)
-            if deliv == "N":
-                blocks.append('<div class="block red"><span class="badge red">배달불요</span><div class="txt">배달하지 않음</div></div>')
-            if base:
-                blocks.append(f'<div class="block gry"><span class="badge gry">기본메뉴</span><div class="txt">{base}</div></div>')
-            if chg:
-                blocks.append(f'<div class="block yel"><span class="badge yel">변경메뉴</span><div class="txt">{chg}</div></div>')
+            cells_html.append(
+                f"""
+                <div class="{cls}">
+                  {dayline}
+                  {base_line}
+                  {sub}
+                </div>
+                """
+            )
 
-            tds.append(f'<td class="cell" style="background:{bg}; border:1px solid {border};">{"".join(blocks)}</td>')
-        rows.append("<tr>" + "".join(tds) + "</tr>")
+    html = f"""
+    <!doctype html>
+    <html lang="ko">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{
+          font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+          margin:0; background:#ffffff;
+        }}
+        .wrap {{
+          width: 1080px;
+          padding: 18px 18px 10px 18px;
+        }}
+        .top {{
+          display:flex; align-items:center; justify-content:space-between;
+          margin-bottom: 10px;
+        }}
+        .logoBox {{
+          width: 290px;
+          height: 92px;
+          border: 2px solid rgba(0,0,0,0.22);
+          border-radius: 18px;
+          display:flex; align-items:center; justify-content:center;
+          background:#fff;
+        }}
+        .title {{
+          text-align:center;
+          font-weight: 900;
+          font-size: 34px;
+          line-height: 1.05;
+        }}
 
-    # 리스트(배달불요/변경메뉴)
+        .dowrow {{
+          display:grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 14px;
+          margin: 10px 4px 6px 4px;
+          font-weight: 900;
+          opacity: 0.9;
+        }}
+        .dowrow div {{ text-align:center; }}
+
+        .grid {{
+          display:grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 14px;
+          margin-top: 2px;
+        }}
+
+        .cell {{
+          border: 2px solid rgba(0,0,0,0.22);
+          border-radius: 14px;
+          min-height: 92px;
+          padding: 10px 10px 8px 10px;
+          background:#fff;
+        }}
+        .cell.empty {{
+          border: 2px dashed rgba(0,0,0,0.22);
+          background: #fff;
+        }}
+
+        .cell.chg {{
+          border-color: rgba(245, 166, 35, 0.85);
+          background: rgba(255, 243, 210, 0.55);
+        }}
+        .cell.no {{
+          border-color: rgba(255, 60, 60, 0.65);
+          background: rgba(255, 235, 235, 0.55);
+        }}
+
+        .dayline {{
+          display:flex; align-items:center; gap:8px;
+          margin-bottom: 6px;
+        }}
+        .daynum {{ font-weight: 900; }}
+        .dow {{ opacity: 0.75; font-weight: 800; }}
+        .pill {{
+          display:inline-block;
+          padding: 2px 8px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 900;
+        }}
+        .pill-chg {{ background:#ffe3a1; border:1px solid rgba(245,166,35,0.6); }}
+        .pill-no {{ background:#ffd0d0; border:1px solid rgba(255,60,60,0.55); }}
+
+        .base {{
+          font-size: 18px;
+          font-weight: 900;
+          line-height: 1.15;
+          margin-top: 2px;
+        }}
+
+        .chgline {{
+          margin-top: 8px;
+          display:flex; align-items:center; gap:8px;
+        }}
+        .chgtext {{
+          font-size: 18px;
+          font-weight: 900;
+          color: #d10000;
+          line-height: 1.15;
+        }}
+        .muted {{ opacity: 0.0; }} /* 빈칸 높이 유지용 */
+      </style>
+    </head>
+    <body>
+      <div class="wrap">
+        <div class="top">
+          <div class="logoBox">{moms}</div>
+          <div class="title">{title}</div>
+          <div class="logoBox">{assoc}</div>
+        </div>
+
+        <div class="dowrow">
+          <div>월</div><div>화</div><div>수</div><div>목</div><div>금</div>
+        </div>
+
+        <div class="grid">
+          {''.join(cells_html)}
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    return html
+
+poster = poster_html(year, month)
+st.components.v1.html(poster, height=760, scrolling=True)
+
+# A4 출력용(필요한 것만)
+st.markdown("## 업체 제출용 A4 출력 (달력 + 리스트 1페이지)")
+
+def vendor_a4_html(year: int, month: int) -> str:
+    moms = _img_b64_tag(MOMS_LOGO, 46) or ""
+    assoc = _img_b64_tag(ASSOC_LOGO, 46) or ""
+    bowl = _img_b64_tag(BOWL_IMG, 52) or ""
+
+    title = output_filename(year, month)
+
+    # 리스트(배달불요/변경)
     days = [d for d in month_days if d.month == month and _is_weekday(d)]
     nod = []
     chg_list = []
@@ -589,67 +602,150 @@ def vendor_a4_html(year: int, month: int) -> str:
     else:
         chg_items = "<li>해당 없음</li>"
 
+    # 달력은 포스터와 동일한 스타일로 축약(월~금)
+    cells = []
+    for w in weeks:
+        for i in range(5):
+            d = w[i]
+            if d.month != month:
+                cells.append("<div class='cell empty'></div>")
+                continue
+
+            base = get_base(d)
+            chg = get_change(d)
+            deliv = get_delivery_flag(d)
+
+            cls = "cell"
+            badge = ""
+            sub = ""
+            if deliv == "N":
+                cls += " no"
+                badge = "<span class='pill pill-no'>배달불요</span>"
+            if chg:
+                cls += " chg"
+                sub = f"<div class='chgline'><span class='pill pill-chg'>변경</span><span class='chgtext'>{chg}</span></div>"
+
+            dayline = f"<div class='dayline'><span class='daynum'>{d.day:02d}</span><span class='dow'>({_dow_kr(d.weekday())})</span>{badge}</div>"
+            base_line = f"<div class='base'>{base}</div>" if base else "<div class='base muted'></div>"
+            cells.append(f"<div class='{cls}'>{dayline}{base_line}{sub}</div>")
+
     html = f"""
     <!doctype html>
     <html lang="ko">
     <head>
       <meta charset="utf-8"/>
       <style>
-        @page {{ size: A4 portrait; margin: 12mm; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; margin:0; color:#111; }}
-        .top {{ display:flex; align-items:center; justify-content:space-between; gap:10px; }}
+        @page {{ size: A4 landscape; margin: 10mm; }}
+        body {{
+          font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+          margin:0; color:#111;
+        }}
+        .top {{
+          display:flex; align-items:center; justify-content:space-between;
+          margin-bottom: 6px;
+        }}
         .left {{ display:flex; align-items:center; gap:10px; }}
-        .title {{ font-size: 18px; font-weight: 900; margin:0; line-height:1.15; }}
-        .assoc {{ font-size: 12.5px; opacity:0.85; margin-top:4px; font-weight:800; }}
-        .mid {{ display:flex; align-items:center; justify-content:center; margin:6px 0 6px 0; }}
+        .title {{ font-size: 18px; font-weight: 900; line-height:1.15; }}
+        .assocline {{ font-size: 12px; font-weight: 800; opacity:0.85; margin-top:4px; }}
+        .mid {{ display:flex; justify-content:center; margin: 4px 0 6px 0; }}
         .verse {{
-          margin-top: 6px; padding: 10px 12px; border-radius: 14px;
-          background: #fffaf2; border: 2px solid rgba(177, 127, 69, 0.35);
-          font-size: 13.5px; font-weight: 900; line-height:1.45; white-space: pre-line;
+          border-radius: 12px;
+          padding: 10px 12px;
+          background: #fffaf2;
+          border: 2px solid rgba(177, 127, 69, 0.35);
+          white-space: pre-line;
+          font-size: 13px;
+          font-weight: 900;
+          line-height: 1.45;
         }}
 
-        table {{ border-collapse: separate; border-spacing: 4px; width:100%; margin-top:8px; }}
-        th {{ text-align:left; font-size: 12px; opacity:0.85; padding: 0 0 2px 2px; }}
-        .cell {{ height: 78px; vertical-align: top; padding: 8px 8px; border-radius: 12px; }}
-        .out {{ background: rgba(0,0,0,0.03); border:1px solid rgba(0,0,0,0.08); }}
+        .dowrow {{
+          display:grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 10px;
+          margin: 8px 2px 4px 2px;
+          font-weight: 900;
+          opacity: 0.9;
+        }}
+        .dowrow div {{ text-align:center; font-size: 12px; }}
 
-        .day {{ font-weight: 900; font-size: 12.5px; margin-bottom:5px; }}
-        .block {{ margin-top:5px; padding: 6px 7px; border-radius: 11px; border: 1px solid rgba(0,0,0,0.10); }}
-        .txt {{ margin-top: 4px; font-size: 11.2px; font-weight: 900; line-height:1.22; }}
-        .badge {{ display:inline-block; padding: 1px 8px; border-radius:999px; font-size: 10.2px; font-weight: 900; }}
+        .grid {{
+          display:grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 10px;
+        }}
+        .cell {{
+          border: 2px solid rgba(0,0,0,0.22);
+          border-radius: 12px;
+          min-height: 74px;
+          padding: 8px 8px 6px 8px;
+          background:#fff;
+        }}
+        .cell.empty {{
+          border: 2px dashed rgba(0,0,0,0.22);
+        }}
+        .cell.chg {{
+          border-color: rgba(245, 166, 35, 0.85);
+          background: rgba(255, 243, 210, 0.55);
+        }}
+        .cell.no {{
+          border-color: rgba(255, 60, 60, 0.65);
+          background: rgba(255, 235, 235, 0.55);
+        }}
 
-        .block.red {{ background: rgba(255,0,0,0.07); border-color: rgba(255,0,0,0.22); }}
-        .badge.red {{ background:#ffcccc; }}
-        .block.yel {{ background: rgba(255,170,0,0.12); border-color: rgba(255,170,0,0.28); }}
-        .badge.yel {{ background:#ffe08a; }}
-        .block.gry {{ background: rgba(0,0,0,0.035); border-color: rgba(0,0,0,0.12); }}
-        .badge.gry {{ background:#eeeeee; }}
+        .dayline {{ display:flex; align-items:center; gap:7px; margin-bottom: 5px; }}
+        .daynum {{ font-weight: 900; font-size: 12px; }}
+        .dow {{ opacity: 0.75; font-weight: 800; font-size: 12px; }}
+        .pill {{
+          display:inline-block;
+          padding: 2px 7px;
+          border-radius: 999px;
+          font-size: 10.5px;
+          font-weight: 900;
+        }}
+        .pill-chg {{ background:#ffe3a1; border:1px solid rgba(245,166,35,0.6); }}
+        .pill-no {{ background:#ffd0d0; border:1px solid rgba(255,60,60,0.55); }}
 
-        .grid2 {{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }}
-        .box {{ border: 1px solid rgba(0,0,0,0.12); border-radius: 12px; padding: 10px 10px; background: rgba(255,255,255,0.95); }}
+        .base {{ font-size: 13px; font-weight: 900; line-height: 1.15; }}
+        .chgline {{ margin-top: 7px; display:flex; align-items:center; gap:7px; }}
+        .chgtext {{ font-size: 13px; font-weight: 900; color:#d10000; line-height:1.15; }}
+        .muted {{ opacity:0.0; }}
+
+        .grid2 {{
+          display:grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 10px;
+        }}
+        .box {{
+          border: 1px solid rgba(0,0,0,0.12);
+          border-radius: 12px;
+          padding: 10px 10px;
+          background:#fff;
+        }}
         .box-title {{ font-weight: 900; margin-bottom: 6px; }}
-        ul {{ margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.35; font-weight: 800; }}
+        ul {{ margin:0; padding-left: 18px; font-size: 12px; font-weight: 800; line-height:1.35; }}
       </style>
     </head>
     <body>
       <div class="top">
         <div class="left">
-          <div>{mom}</div>
+          <div>{moms}</div>
           <div>
             <div class="title">{title}</div>
-            <div class="assoc">{ASSOC_LINE}</div>
+            <div class="assocline">{ASSOC_LINE}</div>
           </div>
         </div>
-        <div>{kap}</div>
+        <div>{assoc}</div>
       </div>
 
       <div class="mid">{bowl}</div>
       <div class="verse">{GONGYANG_VERSE}</div>
 
-      <table>
-        <thead><tr><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th></tr></thead>
-        <tbody>{''.join(rows)}</tbody>
-      </table>
+      <div class="dowrow">
+        <div>월</div><div>화</div><div>수</div><div>목</div><div>금</div>
+      </div>
+      <div class="grid">{''.join(cells)}</div>
 
       <div class="grid2">
         <div class="box">
@@ -666,11 +762,10 @@ def vendor_a4_html(year: int, month: int) -> str:
     """
     return html
 
-
 a4_html = vendor_a4_html(year, month)
-st.components.v1.html(a4_html, height=860, scrolling=True)
+st.components.v1.html(a4_html, height=820, scrolling=True)
 st.download_button(
-    "A4(HTML) 다운로드",
+    "업체 제출용 A4(HTML) 다운로드",
     data=a4_html.encode("utf-8"),
     file_name=f"{output_filename(year, month)}_업체제출용A4.html",
     mime="text/html",
