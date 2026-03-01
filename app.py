@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date
 import calendar
 import base64
 import html
@@ -28,6 +28,9 @@ BASE_MENU_PATH = DATA_DIR / "base_menu.csv"         # date,base_menu
 CHANGE_MENU_PATH = DATA_DIR / "change_menu.csv"     # date,change_menu
 DELIVERY_PATH = DATA_DIR / "delivery.csv"           # date,delivery (Y/N)
 
+# 포스터 하단 전화번호
+ASSOC_PHONE = "010-7101-5871"
+
 # (선택) 로고/이미지 파일 (repo에 있으면 자동 반영)
 ASSET_CANDIDATES = {
     "moms": ["moms.png", "moms_logo.png", "momsrak.png", "momsrak_logo.png", "MOMS.png", "MOMS_logo.png"],
@@ -45,33 +48,6 @@ GONGYANG_TEXT = """이 음식이 어디에서 왔는가
 # -----------------------------
 # 유틸
 # -----------------------------
-def _safe_read_csv(path: Path, expected_cols: list[str]) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame(columns=expected_cols)
-    try:
-        df = pd.read_csv(path, dtype=str)
-    except Exception:
-        # 인코딩 문제 대비
-        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
-    for c in expected_cols:
-        if c not in df.columns:
-            df[c] = ""
-    df = df[expected_cols].copy()
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df.dropna(subset=["date"]).copy()
-    df["date"] = df["date"].dt.date
-    return df
-
-
-def _find_asset_base64(candidates: list[str]) -> str | None:
-    for name in candidates:
-        p = APP_DIR / name
-        if p.exists() and p.is_file():
-            b = p.read_bytes()
-            return base64.b64encode(b).decode("utf-8")
-    return None
-
-
 def _norm(s: str) -> str:
     s = "" if s is None else str(s)
     s = re.sub(r"\s+", " ", s).strip()
@@ -86,55 +62,252 @@ def _month_title(year: int, month: int) -> str:
     return f"동약협회 {year}년 {month}월 식단변경 내역"
 
 
+def _safe_read_csv(path: Path, expected_cols: list[str]) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=expected_cols)
+
+    try:
+        df = pd.read_csv(path, dtype=str)
+    except Exception:
+        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+
+    for c in expected_cols:
+        if c not in df.columns:
+            df[c] = ""
+
+    df = df[expected_cols].copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"]).copy()
+    df["date"] = df["date"].dt.date
+    return df
+
+
+def _save_csv_atomic(df: pd.DataFrame, path: Path, cols: list[str]) -> None:
+    df2 = df.copy()
+    df2 = df2[cols].copy()
+    tmp = path.with_suffix(".tmp")
+    df2.to_csv(tmp, index=False, encoding="utf-8-sig")
+    tmp.replace(path)
+
+
+def _find_asset_base64(candidates: list[str]) -> str | None:
+    for name in candidates:
+        p = APP_DIR / name
+        if p.exists() and p.is_file():
+            b = p.read_bytes()
+            return base64.b64encode(b).decode("utf-8")
+    return None
+
+
+def _upsert_value(path: Path, value_col: str, d: date, value: str) -> None:
+    # 파일 로드
+    if value_col == "base_menu":
+        df = _safe_read_csv(path, ["date", "base_menu"])
+    elif value_col == "change_menu":
+        df = _safe_read_csv(path, ["date", "change_menu"])
+    else:
+        df = _safe_read_csv(path, ["date", "delivery"])
+
+    # upsert
+    if df.empty:
+        df = pd.DataFrame({"date": [d], value_col: [value]})
+    else:
+        mask = df["date"] == d
+        if mask.any():
+            df.loc[mask, value_col] = value
+        else:
+            df = pd.concat([df, pd.DataFrame({"date": [d], value_col: [value]})], ignore_index=True)
+
+    # date 정렬
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+    # 저장
+    _save_csv_atomic(df, path, ["date", value_col])
+
+
+def _load_merged() -> pd.DataFrame:
+    base_df = _safe_read_csv(BASE_MENU_PATH, ["date", "base_menu"]).rename(columns={"base_menu": "base"})
+    chg_df = _safe_read_csv(CHANGE_MENU_PATH, ["date", "change_menu"]).rename(columns={"change_menu": "change"})
+    deliv_df = _safe_read_csv(DELIVERY_PATH, ["date", "delivery"]).rename(columns={"delivery": "delivery"})
+
+    df = pd.merge(base_df, chg_df, on="date", how="outer").merge(deliv_df, on="date", how="outer")
+    if df.empty:
+        df = pd.DataFrame(columns=["date", "base", "change", "delivery"])
+
+    df["base"] = df["base"].fillna("")
+    df["change"] = df["change"].fillna("")
+    df["delivery"] = df["delivery"].fillna("Y").str.upper().replace({"": "Y"})
+    df["delivery"] = df["delivery"].where(df["delivery"].isin(["Y", "N"]), "Y")
+    return df
+
+
 # -----------------------------
-# 데이터 로드
-# -----------------------------
-base_df = _safe_read_csv(BASE_MENU_PATH, ["date", "base_menu"]).rename(columns={"base_menu": "base"})
-chg_df = _safe_read_csv(CHANGE_MENU_PATH, ["date", "change_menu"]).rename(columns={"change_menu": "change"})
-deliv_df = _safe_read_csv(DELIVERY_PATH, ["date", "delivery"]).rename(columns={"delivery": "delivery"})
-
-# 합치기
-df = (
-    pd.merge(base_df, chg_df, on="date", how="outer")
-    .merge(deliv_df, on="date", how="outer")
-)
-
-if df.empty:
-    df = pd.DataFrame(columns=["date", "base", "change", "delivery"])
-
-df["base"] = df["base"].fillna("")
-df["change"] = df["change"].fillna("")
-df["delivery"] = df["delivery"].fillna("N").str.upper().replace({"": "N"})
-df["delivery"] = df["delivery"].where(df["delivery"].isin(["Y", "N"]), "N")
-
-# -----------------------------
-# 상단 UI
+# 스타일
 # -----------------------------
 st.markdown(
     """
 <style>
 .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
 .poster-wrap { max-width: 980px; margin: 0 auto; }
-.mini-note { font-size: 12px; opacity: 0.7; }
 hr { margin: 1.2rem 0 1rem 0; }
+.small { font-size: 12px; opacity: .75; }
+.card {
+  border: 1px solid rgba(0,0,0,0.10);
+  border-radius: 14px;
+  padding: 14px;
+  background: #fff;
+}
+.cal-grid {
+  display:grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+.daybtn > button{
+  width: 100% !important;
+  text-align: left !important;
+  border-radius: 14px !important;
+  padding: 10px 10px !important;
+  min-height: 92px !important;
+  white-space: pre-line !important;
+  border: 1px solid rgba(0,0,0,0.12) !important;
+  background: rgba(255,255,255,0.95) !important;
+}
+.daybtn.off > button{
+  background: rgba(255, 80, 80, 0.12) !important;
+  border-color: rgba(255, 80, 80, 0.22) !important;
+}
+.daybtn.chg > button{
+  background: rgba(255, 210, 80, 0.18) !important;
+  border-color: rgba(255, 170, 0, 0.26) !important;
+}
+.badge { font-size: 12px; font-weight: 800; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
+# -----------------------------
+# 상단: 월 선택
+# -----------------------------
 today = date.today()
-years = list(range(today.year - 1, today.year + 2))
-cols = st.columns([1, 1, 2, 2])
-with cols[0]:
+years = list(range(today.year - 1, today.year + 3))
+
+c0, c1, c2 = st.columns([1, 1, 2])
+with c0:
     sel_year = st.selectbox("년도", years, index=years.index(today.year) if today.year in years else 0)
-with cols[1]:
+with c1:
     sel_month = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
-with cols[2]:
-    st.caption("※ 이 화면은 **포스터 미리보기 + PNG/HTML 다운로드**만 제공합니다.")
-with cols[3]:
-    st.caption("데이터 파일: data/base_menu.csv, data/change_menu.csv, data/delivery.csv")
+with c2:
+    st.caption("입력(달력 클릭) → 포스터 미리보기 → PNG/HTML 다운로드")
 
 title_for_file = _month_title(int(sel_year), int(sel_month))
+
+# 데이터 로드
+df = _load_merged()
+
+
+# -----------------------------
+# 입력용 달력 (월~금) + 날짜 클릭하면 입력창
+# -----------------------------
+def _get_day_state(d: date) -> tuple[str, str, str]:
+    row = df[df["date"] == d]
+    if row.empty:
+        return "", "", "Y"  # 기본: 배달(Y)
+    base = _norm(row.iloc[0]["base"])
+    chg = _norm(row.iloc[0]["change"])
+    delivery = _norm(row.iloc[0]["delivery"]) or "Y"
+    delivery = delivery if delivery in ("Y", "N") else "Y"
+    return base, chg, delivery
+
+
+def _render_day_label(d: date, base: str, chg: str, delivery: str) -> tuple[str, str]:
+    wd = _weekday_kr(d)
+    top = f"{d.day}({wd})"
+    lines = [top]
+
+    if delivery == "N":
+        lines.append("🚫 배달불요")
+    elif chg:
+        # 기본이 있으면 → 표시
+        if base:
+            lines.append(f"🔁 {base} → {chg}")
+        else:
+            lines.append(f"🔁 {chg}")
+    elif base:
+        lines.append(base)
+
+    css_class = "daybtn"
+    if delivery == "N":
+        css_class += " off"
+    elif chg:
+        css_class += " chg"
+    return "\n".join(lines), css_class
+
+
+@st.dialog("날짜 입력", width="large")
+def edit_date_dialog(d: date):
+    base, chg, delivery = _get_day_state(d)
+
+    st.markdown(f"### {d.isoformat()} ({_weekday_kr(d)})")
+    st.caption("저장하면 창이 닫히고, 달력/포스터에 바로 반영됩니다.")
+
+    base_in = st.text_input("기본메뉴", value=base, placeholder="예: 소고기무국")
+    chg_in = st.text_input("변경메뉴(없으면 비워두기)", value=chg, placeholder="예: 제육볶음")
+    delivery_ok = st.checkbox("배달함", value=(delivery == "Y"))
+    # 내부 저장은 Y/N
+    delivery_val = "Y" if delivery_ok else "N"
+
+    cA, cB, cC = st.columns([1, 1, 2])
+    with cA:
+        if st.button("💾 저장", use_container_width=True, type="primary"):
+            _upsert_value(BASE_MENU_PATH, "base_menu", d, _norm(base_in))
+            _upsert_value(CHANGE_MENU_PATH, "change_menu", d, _norm(chg_in))
+            _upsert_value(DELIVERY_PATH, "delivery", d, delivery_val)
+            st.rerun()
+    with cB:
+        if st.button("닫기", use_container_width=True):
+            st.rerun()
+    with cC:
+        st.caption("※ 배달불요는 ‘배달함’ 체크를 해제하면 됩니다.")
+
+
+def input_calendar(year: int, month: int):
+    st.subheader("1) 입력(월~금 달력) — 날짜를 클릭해서 입력/수정")
+    st.caption("토/일은 표시하지 않습니다.")
+
+    first_day = date(year, month, 1)
+    last_day = date(year, month, calendar.monthrange(year, month)[1])
+
+    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
+    weeks = cal.monthdatescalendar(year, month)
+
+    # 요일 헤더
+    hcols = st.columns(5)
+    for i, name in enumerate(["월", "화", "수", "목", "금"]):
+        with hcols[i]:
+            st.markdown(f"<div class='small'><b>{name}</b></div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='cal-grid'>", unsafe_allow_html=True)
+
+    # 각 주별로 월~금만 5칸 고정으로 출력 (다른 달 날짜는 빈칸)
+    for w in weeks:
+        mf = [d for d in w if d.weekday() <= 4]  # Mon-Fri (항상 5개)
+        for d in mf:
+            if d.month != month:
+                # 빈칸
+                st.markdown("<div class='card' style='opacity:.25; min-height:92px;'></div>", unsafe_allow_html=True)
+                continue
+
+            base, chg, delivery = _get_day_state(d)
+            label, css_class = _render_day_label(d, base, chg, delivery)
+
+            st.markdown(f"<div class='{css_class}'>", unsafe_allow_html=True)
+            if st.button(label, key=f"day_{d.isoformat()}"):
+                edit_date_dialog(d)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -145,42 +318,45 @@ def build_poster_html(year: int, month: int) -> str:
     kapma_b64 = _find_asset_base64(ASSET_CANDIDATES["kapma"])
     bowl_b64 = _find_asset_base64(ASSET_CANDIDATES["bowl"])
 
-    # 해당 월 데이터만
     first_day = date(year, month, 1)
     last_day = date(year, month, calendar.monthrange(year, month)[1])
 
-    month_df = df[(df["date"] >= first_day) & (df["date"] <= last_day)].copy()
-    # dict로 빠르게 조회
-    base_map = {r["date"]: _norm(r["base"]) for _, r in month_df.iterrows()}
-    chg_map = {r["date"]: _norm(r["change"]) for _, r in month_df.iterrows()}
-    del_map = {r["date"]: _norm(r["delivery"]) for _, r in month_df.iterrows()}
+    mdf = df[(df["date"] >= first_day) & (df["date"] <= last_day)].copy()
 
-    # 월~금만 (0~4). 달력은 주 단위로 구성하되 토/일은 아예 표시하지 않음.
-    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
-    weeks = cal.monthdatescalendar(year, month)  # 각 주는 7일
-    # 주별로 월~금만 뽑기
-    weeks_mf = []
-    for w in weeks:
-        mf = [d for d in w if d.weekday() <= 4]  # Mon-Fri
-        weeks_mf.append(mf)
+    base_map = {r["date"]: _norm(r["base"]) for _, r in mdf.iterrows()}
+    chg_map = {r["date"]: _norm(r["change"]) for _, r in mdf.iterrows()}
+    del_map = {r["date"]: _norm(r["delivery"]) for _, r in mdf.iterrows()}
+
+    cal = calendar.Calendar(firstweekday=0)
+    weeks = cal.monthdatescalendar(year, month)
+    weeks_mf = [[d for d in w if d.weekday() <= 4] for w in weeks]
+
+    def img_tag(b64: str | None, height_px: int) -> str:
+        if not b64:
+            return ""
+        return f"<img src='data:image/png;base64,{b64}' style='height:{height_px}px; width:auto; display:block;'/>"
+
+    moms_img = img_tag(moms_b64, 34)
+    kapma_img = img_tag(kapma_b64, 34)
+    bowl_img = img_tag(bowl_b64, 52)
+
+    gongyang_html = "<br/>".join(html.escape(line) for line in GONGYANG_TEXT.splitlines())
+    month_title = _month_title(year, month)
 
     def cell_html(d: date) -> str:
-        # 다른 달 날짜는 빈칸 처리
         if d.month != month:
             return '<td class="cell empty"></td>'
 
         b = base_map.get(d, "")
         c = chg_map.get(d, "")
-        dy = del_map.get(d, "N")
+        dy = del_map.get(d, "Y")
+        dy = dy if dy in ("Y", "N") else "Y"
 
-        # 상태
-        is_delivery_off = (dy == "N")  # N이면 배달불요(기존 대화 기준)
+        is_delivery_off = (dy == "N")
         has_change = (c != "")
 
-        # 표시 텍스트
         menu_line = ""
         if has_change:
-            # 기본이 있으면 "기본 → 변경", 아니면 변경만
             if b:
                 menu_line = f"{html.escape(b)} <span class='arrow'>→</span> <b>{html.escape(c)}</b>"
             else:
@@ -209,21 +385,6 @@ def build_poster_html(year: int, month: int) -> str:
   <div class="d-menu">{menu_line}</div>
 </td>
 """
-
-    # 로고 IMG
-    def img_tag(b64: str | None, height_px: int) -> str:
-        if not b64:
-            return ""
-        return f"<img src='data:image/png;base64,{b64}' style='height:{height_px}px; width:auto; display:block;'/>"
-
-    moms_img = img_tag(moms_b64, 34)
-    kapma_img = img_tag(kapma_b64, 34)
-    bowl_img = img_tag(bowl_b64, 52)
-
-    # 공양게(붓글씨 느낌 폰트는 환경차가 있어, 웹폰트 없이도 최대한 분위기만)
-    gongyang_html = "<br/>".join(html.escape(line) for line in GONGYANG_TEXT.splitlines())
-
-    month_title = _month_title(year, month)
 
     poster = f"""
 <div id="poster" class="poster">
@@ -259,7 +420,7 @@ def build_poster_html(year: int, month: int) -> str:
   </table>
 
   <div class="foot">
-    <div class="mini">※ 표시: 배달불요 / 변경 / 기본</div>
+    <div class="mini">동약협회 {ASSOC_PHONE}</div>
   </div>
 </div>
 
@@ -271,9 +432,7 @@ def build_poster_html(year: int, month: int) -> str:
     border: 1px solid rgba(0,0,0,0.08);
     border-radius: 14px;
   }}
-  .head {{
-    display:flex; align-items:stretch; gap: 12px;
-  }}
+  .head {{ display:flex; align-items:stretch; gap: 12px; }}
   .brand {{
     width: 190px;
     border: 1px solid rgba(0,0,0,0.08);
@@ -293,33 +452,13 @@ def build_poster_html(year: int, month: int) -> str:
     border: 1px solid rgba(0,0,0,0.08);
     border-radius: 12px;
     padding: 10px 14px;
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    justify-content:center;
-    gap: 6px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 6px;
   }}
-  .gong-title {{
-    font-weight: 900;
-    font-size: 18px;
-    letter-spacing: .2px;
-  }}
-  .gong-text {{
-    font-size: 14px;
-    line-height: 1.35;
-    text-align: center;
-    white-space: normal;
-    opacity: .92;
-  }}
-  .bowl {{
-    margin-top: 2px;
-  }}
+  .gong-title {{ font-weight: 900; font-size: 18px; letter-spacing: .2px; }}
+  .gong-text {{ font-size: 14px; line-height: 1.35; text-align: center; opacity: .92; }}
+  .bowl {{ margin-top: 2px; }}
   .main-title {{
-    margin-top: 14px;
-    font-size: 20px;
-    font-weight: 900;
-    text-align:center;
-    letter-spacing: .2px;
+    margin-top: 14px; font-size: 20px; font-weight: 900; text-align:center; letter-spacing: .2px;
   }}
   .cal {{
     width: 100%;
@@ -342,13 +481,8 @@ def build_poster_html(year: int, month: int) -> str:
     border: 1px solid rgba(0,0,0,0.10);
     background: #fff;
   }}
-  .cell.empty {{
-    border: none;
-    background: transparent;
-  }}
-  .cell.base {{
-    background: rgba(0,0,0,0.01);
-  }}
+  .cell.empty {{ border: none; background: transparent; }}
+  .cell.base {{ background: rgba(0,0,0,0.01); }}
   .cell.chg {{
     background: rgba(255, 210, 80, 0.20);
     border-color: rgba(255, 170, 0, 0.35);
@@ -357,68 +491,28 @@ def build_poster_html(year: int, month: int) -> str:
     background: rgba(255, 80, 80, 0.16);
     border-color: rgba(255, 80, 80, 0.30);
   }}
-  .d-top {{
-    display:flex; justify-content:space-between; align-items:flex-start; gap: 6px;
-    margin-bottom: 6px;
-  }}
-  .d-num {{
-    font-weight: 900;
-    font-size: 16px;
-  }}
-  .d-wd {{
-    font-weight: 700;
-    font-size: 12px;
-    opacity: .75;
-    margin-left: 4px;
-  }}
+  .d-top {{ display:flex; justify-content:space-between; align-items:flex-start; gap: 6px; margin-bottom: 6px; }}
+  .d-num {{ font-weight: 900; font-size: 16px; }}
+  .d-wd {{ font-weight: 700; font-size: 12px; opacity: .75; margin-left: 4px; }}
   .d-badge .badge {{
-    display:inline-block;
-    font-size: 12px;
-    padding: 3px 8px;
-    border-radius: 999px;
-    font-weight: 800;
-    border: 1px solid rgba(0,0,0,0.10);
-    background: rgba(255,255,255,0.7);
+    display:inline-block; font-size: 12px; padding: 3px 8px; border-radius: 999px; font-weight: 800;
+    border: 1px solid rgba(0,0,0,0.10); background: rgba(255,255,255,0.7);
   }}
-  .badge.chg {{
-    border-color: rgba(255, 170, 0, 0.45);
-  }}
-  .badge.off {{
-    border-color: rgba(255, 80, 80, 0.45);
-  }}
-  .d-menu {{
-    font-size: 13px;
-    line-height: 1.3;
-    white-space: normal;
-    word-break: keep-all;
-  }}
-  .arrow {{
-    opacity: .75;
-    font-weight: 900;
-    margin: 0 2px;
-  }}
-  .foot {{
-    margin-top: 6px;
-    display:flex; justify-content:flex-end;
-  }}
-  .mini {{
-    font-size: 12px;
-    opacity: .7;
-  }}
+  .badge.chg {{ border-color: rgba(255, 170, 0, 0.45); }}
+  .badge.off {{ border-color: rgba(255, 80, 80, 0.45); }}
+  .d-menu {{ font-size: 13px; line-height: 1.3; word-break: keep-all; }}
+  .arrow {{ opacity: .75; font-weight: 900; margin: 0 2px; }}
+  .foot {{ margin-top: 10px; display:flex; justify-content:flex-end; }}
+  .mini {{ font-size: 12px; opacity: .8; font-weight: 800; }}
 </style>
 """
     return poster
 
 
 # -----------------------------
-# PNG 캡처/다운로드 컴포넌트
+# PNG 캡처/다운로드 + A4 HTML 다운로드
 # -----------------------------
 def poster_png_downloader(poster_html: str, filename_base: str):
-    """
-    poster_html: 캡처할 포스터 전체 HTML
-    filename_base: 예) '동약협회 2026년 2월 식단변경 내역'
-    """
-    # components.html ↔ Streamlit 값 전달 (postMessage)
     js = f"""
 <div id="capture-wrap" style="background:#fff; padding: 8px;">
   {poster_html}
@@ -497,27 +591,27 @@ def download_a4_html(poster_html: str, filename_base: str):
 
 
 # -----------------------------
-# 화면: 포스터 미리보기 + 다운로드
+# 화면 구성
 # -----------------------------
-st.markdown("---")
-poster_html = build_poster_html(int(sel_year), int(sel_month))
+input_calendar(int(sel_year), int(sel_month))
 
-st.subheader("포스터(달력형) 미리보기")
+st.markdown("---")
+st.subheader("2) 포스터(달력형) 미리보기")
+poster_html = build_poster_html(int(sel_year), int(sel_month))
 components.html(f"<div class='poster-wrap'>{poster_html}</div>", height=980, scrolling=True)
 
 st.markdown("---")
-st.subheader("보내기용 파일 만들기")
+st.subheader("3) 보내기용 파일 만들기")
 
 c1, c2 = st.columns([1, 1])
 with c1:
-    st.markdown("**1) PNG(사진) 만들기 & 다운로드**")
+    st.markdown("**PNG(사진) 다운로드**")
     st.caption("휴대폰 문자/카톡으로 보내기 가장 쉬운 방식입니다.")
     poster_png_downloader(poster_html, title_for_file)
 
 with c2:
-    st.markdown("**2) A4 인쇄용 HTML 다운로드**")
+    st.markdown("**A4 인쇄용 HTML 다운로드**")
     st.caption("HTML을 열고 ‘인쇄 → PDF 저장’하면 A4 1페이지로 정리하기 좋습니다.")
     download_a4_html(poster_html, title_for_file)
 
-st.markdown("---")
-st.caption("파일명 규칙: " + title_for_file)
+st.caption(f"파일명: {title_for_file} / 전화번호 표기: 동약협회 {ASSOC_PHONE}")
